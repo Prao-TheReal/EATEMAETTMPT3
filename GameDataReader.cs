@@ -195,7 +195,7 @@ public class GameDataReader
 
                 var newChar = new CharacterData { Address = charAddr, Name = name, Location = location, IsPlayer = isMe, Distance = dist };
 
-                if (!newChar.IsPlayer && dist < 150)
+                if (!newChar.IsPlayer && dist < 60)
                 {
                     newChar.Bones = GetSkeleton(charAddr);
                     IntPtr mesh = _memory.ReadPointer(charAddr + Offsets.Mesh);
