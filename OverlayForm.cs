@@ -1,7 +1,6 @@
 ﻿using System.Runtime.InteropServices;
 using System.Diagnostics;
 using System.Drawing.Drawing2D;
-using System.Numerics; // Ensure this is here
 
 namespace Remnant2ESP;
 
@@ -34,7 +33,7 @@ public class OverlayForm : Form
     private const int WS_EX_TOPMOST = 0x8;
 
     // [Screen Settings]
-    private const int SCREEN_WIDTH = 5120; // Your resolution
+    private const int SCREEN_WIDTH = 5120; // Check your resolution
     private const int SCREEN_HEIGHT = 1440;
     private const int TARGET_FPS = 144;
 
@@ -57,7 +56,6 @@ public class OverlayForm : Form
     private bool _drawWeakspot = true; // F7
     private bool _drawBox = true;      // F8
     private bool _drawDist = true;     // F9
-    private bool _drawSkeleton = true; // F10 [NEW]
 
     private bool _isAttached = false;
     private CameraData _lastCamera;
@@ -82,7 +80,6 @@ public class OverlayForm : Form
     private readonly Brush _textBrush;
     private readonly Brush _onBrush;
     private readonly Brush _offBrush;
-    private readonly Brush _boneBrush;
 
     private readonly Font _titleFont;
     private readonly Font _itemFont;
@@ -108,7 +105,6 @@ public class OverlayForm : Form
         _textBrush = new SolidBrush(Color.FromArgb(230, 230, 230));
         _onBrush = new SolidBrush(Color.FromArgb(0, 255, 100));
         _offBrush = new SolidBrush(Color.FromArgb(150, 150, 150));
-        _boneBrush = new SolidBrush(Color.Cyan);
 
         _titleFont = new Font("Segoe UI", 10, FontStyle.Bold);
         _itemFont = new Font("Segoe UI", 9, FontStyle.Regular);
@@ -185,11 +181,14 @@ public class OverlayForm : Form
         DrawInfoPanel(g, cam, _debugInfo, attached, enabled);
         if (!attached || !enabled) return;
 
+        // --- DEFINE CENTER ONCE ---
         float centerX = SCREEN_WIDTH / 2.0f;
         float centerY = SCREEN_HEIGHT / 2.0f;
 
+        // Draw FOV Circle
         g.DrawEllipse(_fovPen, centerX - AIM_FOV_RADIUS, centerY - AIM_FOV_RADIUS, AIM_FOV_RADIUS * 2, AIM_FOV_RADIUS * 2);
 
+        // --- BEST TARGET VARIABLES ---
         Vector3? bestTargetPos = null;
         float closestDistToCrosshair = 99999f;
 
@@ -197,65 +196,28 @@ public class OverlayForm : Form
         {
             if (character.IsPlayer) continue;
 
-            // --- 1. FIND WEAKSPOT & DRAW SKELETON ---
+            // --- 1. FIND WEAKSPOT ---
             Vector3? weakspotPos3D = null;
-            var screenRoot = _w2s.Project(character.Location, cam);
-
             if (character.Bones != null && character.Bones.Count > 0)
             {
-                // [PRIORITY 1] TRUE WEAKSPOT (The "VFX_" Socket Logic)
-                // This is the Dynamic Fix. It asks the game "What is the weakspot?" and aims there.
-                if (character.WeakspotIndex != -1 && character.Bones.ContainsKey(character.WeakspotIndex))
-                {
-                    weakspotPos3D = character.Bones[character.WeakspotIndex];
-                }
-
-                // [PRIORITY 2] BACKUP CALCULATION (Height Logic)
-                // Only runs if the game didn't tell us a weakspot (e.g. Minions or non-weakspot enemies)
                 double maxScore = -99999;
-
                 foreach (var kvp in character.Bones)
                 {
-                    int boneIndex = kvp.Key;
-                    var bonePos = kvp.Value;
+                    var b = kvp.Value;
+                    double h = b.Z;
+                    double dist = Math.Sqrt(Math.Pow(b.X - character.Location.X, 2) + Math.Pow(b.Y - character.Location.Y, 2));
+                    double score = h - (dist * 5.0);
 
-                    // Draw Skeleton Dots
-                    if (_drawSkeleton)
+                    if (score > maxScore)
                     {
-                        var screenBone = _w2s.Project(bonePos, cam);
-                        if (screenBone.HasValue &&
-                            screenBone.Value.X > -5000 && screenBone.Value.X < 5000 &&
-                            screenBone.Value.Y > -5000 && screenBone.Value.Y < 5000)
-                        {
-                            // Highlight the True Weakspot in Gold if found
-                            Brush dotBrush = (boneIndex == character.WeakspotIndex) ? Brushes.Gold : _boneBrush;
-                            g.FillRectangle(dotBrush, screenBone.Value.X - 1, screenBone.Value.Y - 1, 3, 3);
-
-                            // [DEBUG] Uncomment this to see the BONE NAMES on screen!
-                            // This helps you verify "b_Head" is actually Bone 6.
-                            // g.DrawString(boneIndex.ToString(), _itemFont, Brushes.White, screenBone.Value.X, screenBone.Value.Y);
-                        }
-                    }
-
-                    // Backup Math (Only runs if Priority 1 failed)
-                    if (weakspotPos3D == null)
-                    {
-                        double h = bonePos.Z;
-                        double dist = Math.Sqrt(Math.Pow(bonePos.X - character.Location.X, 2) + Math.Pow(bonePos.Y - character.Location.Y, 2));
-
-                        // Prefer Height (0.2 penalty) so we don't aim at the feet
-                        double score = h - (dist * 0.2);
-
-                        if (score > maxScore)
-                        {
-                            maxScore = score;
-                            weakspotPos3D = bonePos;
-                        }
+                        maxScore = score;
+                        weakspotPos3D = b;
                     }
                 }
             }
 
             // --- 2. CALCULATE BOX ---
+            var screenRoot = _w2s.Project(character.Location, cam);
             var screenWeak = weakspotPos3D.HasValue ? _w2s.Project(weakspotPos3D.Value, cam) : null;
 
             float height = Math.Clamp(1800.0f / (float)character.Distance, 10.0f, 400.0f);
@@ -282,6 +244,7 @@ public class OverlayForm : Form
 
             var distColor = character.Distance < 30 ? _enemyPen : _enemyPenFar;
 
+            // --- 3. DRAW ELEMENTS ---
             if (_drawBox) g.DrawRectangle(distColor, boxX, boxY, width, height);
 
             if (_drawLines)
@@ -294,6 +257,7 @@ public class OverlayForm : Form
             if (_drawDist)
             {
                 string distText = $"{character.Distance:F0}m";
+                // FIX: Use _itemFont instead of _smallFont
                 g.DrawString(distText, _itemFont, _textBrush, boxX, boxY + height + 2);
             }
 
@@ -323,10 +287,12 @@ public class OverlayForm : Form
         if (bestTargetPos.HasValue && (GetAsyncKeyState(0x02) & 0x8000) != 0)
         {
             var screenTarget = _w2s.Project(bestTargetPos.Value, cam);
+
             if (screenTarget.HasValue)
             {
                 float deltaX = screenTarget.Value.X - centerX;
                 float deltaY = screenTarget.Value.Y - centerY;
+
                 mouse_event(MOUSEEVENTF_MOVE, (int)deltaX, (int)deltaY, 0, 0);
             }
         }
@@ -396,7 +362,7 @@ public class OverlayForm : Form
         int menuX = 20;
         int menuY = 20;
         int width = 220;
-        int height = 210;
+        int height = 190;
         int headerHeight = 25;
 
         g.FillRectangle(_menuBgBrush, menuX, menuY, width, height);
@@ -431,7 +397,6 @@ public class OverlayForm : Form
         DrawToggle("Weakspots", "[F7]", _drawWeakspot);
         DrawToggle("2D Box", "[F8]", _drawBox);
         DrawToggle("Distance", "[F9]", _drawDist);
-        DrawToggle("Skeleton", "[F10]", _drawSkeleton);
 
         g.DrawLine(_borderPen, menuX, itemY + 5, menuX + width, itemY + 5);
         itemY += 10;
@@ -447,7 +412,6 @@ public class OverlayForm : Form
             case Keys.F7: _drawWeakspot = !_drawWeakspot; break;
             case Keys.F8: _drawBox = !_drawBox; break;
             case Keys.F9: _drawDist = !_drawDist; break;
-            case Keys.F10: _drawSkeleton = !_drawSkeleton; break;
             case Keys.Escape: this.Close(); break;
         }
     }
@@ -474,8 +438,9 @@ public class OverlayForm : Form
         _enemyPen.Dispose(); _enemyPenFar.Dispose(); _bonePen.Dispose();
         _linePen.Dispose(); _fovPen.Dispose(); _borderPen.Dispose();
 
+        // Correctly dispose of new resources
         _menuBgBrush.Dispose(); _headerBrush.Dispose(); _textBrush.Dispose();
-        _onBrush.Dispose(); _offBrush.Dispose(); _boneBrush.Dispose();
+        _onBrush.Dispose(); _offBrush.Dispose();
         _titleFont.Dispose(); _itemFont.Dispose();
 
         base.OnFormClosing(e);

@@ -145,13 +145,6 @@ public struct Vector4
     public Vector4(double x, double y, double z, double w) { X = x; Y = y; Z = z; W = w; }
 }
 
-
-public struct SocketEntry
-{
-    public string SocketName;
-    public string BoneName;
-}
-
 public struct Matrix4x4
 {
     public double M11, M12, M13, M14;
@@ -177,7 +170,6 @@ public class CharacterData
     public Vector3 Location;
     public bool IsPlayer;
     public double Distance;
-    public int WeakspotIndex = -1;
 
     // This will now initialize correctly when you create the object
     public Dictionary<int, Vector3> Bones { get; set; } = new();
