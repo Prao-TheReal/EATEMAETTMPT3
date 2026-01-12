@@ -38,7 +38,7 @@ public class OverlayForm : Form
     private const int TARGET_FPS = 144;
 
     // AIMBOT SETTINGS
-    private const float AIM_FOV_RADIUS = 100.0f;
+    private const float AIM_FOV_RADIUS = 100.0f; // Tighter circle for precision
 
     private readonly MemoryReader _memory;
     private readonly GameDataReader _gameReader;
@@ -66,23 +66,17 @@ public class OverlayForm : Form
     private DateTime _lastFpsTime = DateTime.Now;
     private int _currentFps = 0;
 
-    // [Game Resources]
+    // [Resources]
     private readonly Pen _enemyPen;
     private readonly Pen _enemyPenFar;
     private readonly Pen _bonePen;
     private readonly Pen _linePen;
     private readonly Pen _fovPen;
-
-    // [UI Resources - ImGui Style]
-    private readonly Brush _menuBgBrush;
-    private readonly Brush _headerBrush;
-    private readonly Pen _borderPen;
     private readonly Brush _textBrush;
-    private readonly Brush _onBrush;
-    private readonly Brush _offBrush;
-
-    private readonly Font _titleFont;
-    private readonly Font _itemFont;
+    private readonly Brush _bgBrush;
+    private readonly Brush _whiteBrush;
+    private readonly Font _font;
+    private readonly Font _smallFont;
 
     public OverlayForm()
     {
@@ -90,24 +84,17 @@ public class OverlayForm : Form
         _gameReader = new GameDataReader(_memory);
         _w2s = new WorldToScreen(SCREEN_WIDTH, SCREEN_HEIGHT);
 
-        // --- GAME COLORS ---
         _enemyPen = new Pen(Color.Red, 2);
         _enemyPenFar = new Pen(Color.Orange, 2);
         _bonePen = new Pen(Color.Cyan, 1.5f);
         _linePen = new Pen(Color.FromArgb(150, Color.Yellow), 1);
-        _fovPen = new Pen(Color.FromArgb(50, 255, 255, 255), 1);
+        _fovPen = new Pen(Color.FromArgb(50, 255, 255, 255), 1); // Faint white circle
 
-        // --- IMGUI STYLE THEME ---
-        _menuBgBrush = new SolidBrush(Color.FromArgb(220, 35, 35, 35));
-        _headerBrush = new SolidBrush(Color.FromArgb(255, 58, 0, 90));
-        _borderPen = new Pen(Color.Black, 1);
-
-        _textBrush = new SolidBrush(Color.FromArgb(230, 230, 230));
-        _onBrush = new SolidBrush(Color.FromArgb(0, 255, 100));
-        _offBrush = new SolidBrush(Color.FromArgb(150, 150, 150));
-
-        _titleFont = new Font("Segoe UI", 10, FontStyle.Bold);
-        _itemFont = new Font("Segoe UI", 9, FontStyle.Regular);
+        _textBrush = new SolidBrush(Color.Yellow);
+        _whiteBrush = new SolidBrush(Color.White);
+        _bgBrush = new SolidBrush(Color.FromArgb(180, 0, 0, 0));
+        _font = new Font("Consolas", 11, FontStyle.Bold);
+        _smallFont = new Font("Consolas", 9);
 
         InitializeOverlay();
 
@@ -185,18 +172,18 @@ public class OverlayForm : Form
         float centerX = SCREEN_WIDTH / 2.0f;
         float centerY = SCREEN_HEIGHT / 2.0f;
 
-        // Draw FOV Circle
+        // Draw FOV Circle (Visual Guide)
         g.DrawEllipse(_fovPen, centerX - AIM_FOV_RADIUS, centerY - AIM_FOV_RADIUS, AIM_FOV_RADIUS * 2, AIM_FOV_RADIUS * 2);
 
         // --- BEST TARGET VARIABLES ---
         Vector3? bestTargetPos = null;
-        float closestDistToCrosshair = 99999f;
+        float closestDistToCrosshair = 99999f; // Start huge
 
         foreach (var character in chars)
         {
             if (character.IsPlayer) continue;
 
-            // --- 1. FIND WEAKSPOT ---
+            // --- 1. FIND WEAKSPOT (Anti-Hand Logic) ---
             Vector3? weakspotPos3D = null;
             if (character.Bones != null && character.Bones.Count > 0)
             {
@@ -204,8 +191,17 @@ public class OverlayForm : Form
                 foreach (var kvp in character.Bones)
                 {
                     var b = kvp.Value;
+
+                    // Height (Higher is better)
                     double h = b.Z;
+
+                    // Horizontal Distance from Character Center (Lower is better)
                     double dist = Math.Sqrt(Math.Pow(b.X - character.Location.X, 2) + Math.Pow(b.Y - character.Location.Y, 2));
+
+                    // [POLISH] "Anti-Hand" Scoring
+                    // We multiply distance by 5.0 (was 2.0). 
+                    // This heavily penalizes bones that stick out to the side (hands/arms), 
+                    // ensuring we pick the Head or Spine which are aligned with Center.
                     double score = h - (dist * 5.0);
 
                     if (score > maxScore)
@@ -257,8 +253,7 @@ public class OverlayForm : Form
             if (_drawDist)
             {
                 string distText = $"{character.Distance:F0}m";
-                // FIX: Use _itemFont instead of _smallFont
-                g.DrawString(distText, _itemFont, _textBrush, boxX, boxY + height + 2);
+                g.DrawString(distText, _smallFont, _textBrush, boxX, boxY + height + 2);
             }
 
             if (_drawWeakspot && screenWeak.HasValue)
@@ -268,13 +263,17 @@ public class OverlayForm : Form
                 g.FillRectangle(Brushes.Red, screenWeak.Value.X - 2, screenWeak.Value.Y - 2, 4, 4);
             }
 
-            // --- 4. AIMBOT SELECTION ---
+            // --- 4. AIMBOT CANDIDATE SELECTION (FOV Logic) ---
             if (weakspotPos3D.HasValue && screenWeak.HasValue)
             {
+                // Calculate distance from CROSSHAIR (Not Player Body)
                 float distX = Math.Abs(screenWeak.Value.X - centerX);
                 float distY = Math.Abs(screenWeak.Value.Y - centerY);
                 float distToCrosshair = (float)Math.Sqrt(distX * distX + distY * distY);
 
+                // Logic:
+                // 1. Must be inside the White FOV Circle
+                // 2. Must be closer to the crosshair than the previous best target
                 if (distToCrosshair < AIM_FOV_RADIUS && distToCrosshair < closestDistToCrosshair)
                 {
                     closestDistToCrosshair = distToCrosshair;
@@ -284,6 +283,7 @@ public class OverlayForm : Form
         }
 
         // --- 5. EXECUTE AIMBOT ---
+        // If we found a target inside our FOV...
         if (bestTargetPos.HasValue && (GetAsyncKeyState(0x02) & 0x8000) != 0)
         {
             var screenTarget = _w2s.Project(bestTargetPos.Value, cam);
@@ -359,48 +359,19 @@ public class OverlayForm : Form
 
     private void DrawInfoPanel(Graphics g, CameraData cam, string debug, bool attached, bool enabled)
     {
-        int menuX = 20;
-        int menuY = 20;
-        int width = 220;
-        int height = 190;
-        int headerHeight = 25;
+        g.FillRectangle(_bgBrush, 10, 10, 320, 160);
+        string status = attached ? (enabled ? "ESP: ON" : "ESP: OFF") : "Waiting...";
+        var statusColor = attached ? (enabled ? Color.Lime : Color.Orange) : Color.Red;
+        using var statusBrush = new SolidBrush(statusColor);
 
-        g.FillRectangle(_menuBgBrush, menuX, menuY, width, height);
-        g.DrawRectangle(_borderPen, menuX, menuY, width, height);
-
-        g.FillRectangle(_headerBrush, menuX, menuY, width, headerHeight);
-        g.DrawRectangle(_borderPen, menuX, menuY, width, headerHeight);
-
-        g.DrawString("REMNANT 2 EXTERNAL", _titleFont, _textBrush, menuX + 5, menuY + 4);
-
-        string status = attached ? "ATTACHED" : "WAITING";
-        Brush statusColor = attached ? _onBrush : _offBrush;
-        g.DrawString(status, _itemFont, statusColor, menuX + width - 70, menuY + 4);
-
-        int itemY = menuY + headerHeight + 10;
-        int gap = 20;
-
-        void DrawToggle(string label, string key, bool isActive)
-        {
-            g.DrawString(key, _itemFont, _offBrush, menuX + 10, itemY);
-            g.DrawString(label, _itemFont, _textBrush, menuX + 45, itemY);
-
-            string state = isActive ? "ON" : "OFF";
-            Brush stateBrush = isActive ? _onBrush : _offBrush;
-            g.DrawString(state, _itemFont, stateBrush, menuX + width - 40, itemY);
-
-            itemY += gap;
-        }
-
-        DrawToggle("ESP Master", "[F5]", enabled);
-        DrawToggle("Snaplines", "[F6]", _drawLines);
-        DrawToggle("Weakspots", "[F7]", _drawWeakspot);
-        DrawToggle("2D Box", "[F8]", _drawBox);
-        DrawToggle("Distance", "[F9]", _drawDist);
-
-        g.DrawLine(_borderPen, menuX, itemY + 5, menuX + width, itemY + 5);
-        itemY += 10;
-        g.DrawString($"FPS: {_currentFps}", _itemFont, _offBrush, menuX + 10, itemY);
+        int y = 15;
+        g.DrawString($"Remnant 2 ESP | {status}", _font, statusBrush, 15, y); y += 22;
+        g.DrawString($"FPS: {_currentFps}", _smallFont, _whiteBrush, 15, y); y += 16;
+        g.DrawString($"[F5] Master Toggle", _smallFont, _whiteBrush, 15, y); y += 16;
+        g.DrawString($"[F6] Lines: {(_drawLines ? "ON" : "OFF")}", _smallFont, _whiteBrush, 15, y); y += 16;
+        g.DrawString($"[F7] Weakspot: {(_drawWeakspot ? "ON" : "OFF")}", _smallFont, _whiteBrush, 15, y); y += 16;
+        g.DrawString($"[F8] Box: {(_drawBox ? "ON" : "OFF")}", _smallFont, _whiteBrush, 15, y); y += 16;
+        g.DrawString($"[F9] Dist: {(_drawDist ? "ON" : "OFF")}", _smallFont, _whiteBrush, 15, y);
     }
 
     private void OnKeyDown(object? sender, KeyEventArgs e)
@@ -436,13 +407,8 @@ public class OverlayForm : Form
         try { _logicThread?.Join(200); } catch { }
         _memory.Dispose();
         _enemyPen.Dispose(); _enemyPenFar.Dispose(); _bonePen.Dispose();
-        _linePen.Dispose(); _fovPen.Dispose(); _borderPen.Dispose();
-
-        // Correctly dispose of new resources
-        _menuBgBrush.Dispose(); _headerBrush.Dispose(); _textBrush.Dispose();
-        _onBrush.Dispose(); _offBrush.Dispose();
-        _titleFont.Dispose(); _itemFont.Dispose();
-
+        _linePen.Dispose(); _textBrush.Dispose(); _whiteBrush.Dispose();
+        _bgBrush.Dispose(); _font.Dispose(); _smallFont.Dispose();
         base.OnFormClosing(e);
     }
 }
