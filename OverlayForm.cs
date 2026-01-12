@@ -203,28 +203,21 @@ public class OverlayForm : Form
 
             if (character.Bones != null && character.Bones.Count > 0)
             {
-                // [PRIORITY 1] HARDCODED OVERRIDE (The Red Eye Fix)
-                // If Bone 42 exists, WE USE IT. Period.
-                if (character.Bones.ContainsKey(42))
+                // [PRIORITY 1] TRUE WEAKSPOT (The "VFX_" Socket Logic)
+                // This is the Dynamic Fix. It asks the game "What is the weakspot?" and aims there.
+                if (character.WeakspotIndex != -1 && character.Bones.ContainsKey(character.WeakspotIndex))
                 {
-                    // FIX: Removed .Position because character.Bones[42] IS the Vector3
-                    weakspotPos3D = character.Bones[42];
-                }
-                // [PRIORITY 2] MEMORY WEAKSPOT (The "VFX_" Socket Logic)
-                // Only runs if Bone 42 wasn't found
-                else if (character.WeakspotIndex != -1 && character.Bones.ContainsKey(character.WeakspotIndex))
-                {
-                    // FIX: Removed .Position
                     weakspotPos3D = character.Bones[character.WeakspotIndex];
                 }
 
-                // [PRIORITY 3] BACKUP CALCULATION (If above failed)
+                // [PRIORITY 2] BACKUP CALCULATION (Height Logic)
+                // Only runs if the game didn't tell us a weakspot (e.g. Minions or non-weakspot enemies)
                 double maxScore = -99999;
 
                 foreach (var kvp in character.Bones)
                 {
                     int boneIndex = kvp.Key;
-                    var bonePos = kvp.Value; // FIX: Removed .Position
+                    var bonePos = kvp.Value;
 
                     // Draw Skeleton Dots
                     if (_drawSkeleton)
@@ -234,23 +227,23 @@ public class OverlayForm : Form
                             screenBone.Value.X > -5000 && screenBone.Value.X < 5000 &&
                             screenBone.Value.Y > -5000 && screenBone.Value.Y < 5000)
                         {
-                            // Draw Bone 42 in GOLD so you know it's detected
-                            Brush dotBrush = (boneIndex == 42) ? Brushes.Gold : _boneBrush;
+                            // Highlight the True Weakspot in Gold if found
+                            Brush dotBrush = (boneIndex == character.WeakspotIndex) ? Brushes.Gold : _boneBrush;
                             g.FillRectangle(dotBrush, screenBone.Value.X - 1, screenBone.Value.Y - 1, 3, 3);
 
-                            // Uncomment to see IDs if you need to debug more bones:
-                             //g.DrawString(boneIndex.ToString(), _itemFont, Brushes.White, screenBone.Value.X, screenBone.Value.Y);
+                            // [DEBUG] Uncomment this to see the BONE NAMES on screen!
+                            // This helps you verify "b_Head" is actually Bone 6.
+                            // g.DrawString(boneIndex.ToString(), _itemFont, Brushes.White, screenBone.Value.X, screenBone.Value.Y);
                         }
                     }
 
-                    // Backup Math (Only runs if we haven't locked onto 42 or True Weakspot yet)
+                    // Backup Math (Only runs if Priority 1 failed)
                     if (weakspotPos3D == null)
                     {
                         double h = bonePos.Z;
                         double dist = Math.Sqrt(Math.Pow(bonePos.X - character.Location.X, 2) + Math.Pow(bonePos.Y - character.Location.Y, 2));
 
-                        // [FIX] Changed 5.0 -> 0.2
-                        // This stops the "Gray Box" issue. It now prefers HEIGHT over CENTER.
+                        // Prefer Height (0.2 penalty) so we don't aim at the feet
                         double score = h - (dist * 0.2);
 
                         if (score > maxScore)
