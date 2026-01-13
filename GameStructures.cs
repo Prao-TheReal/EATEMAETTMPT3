@@ -54,6 +54,8 @@ public static class Offsets
     // [ACharacter]
     public const int CharacterMovement = 0x320;
     public const int Mesh = 0x318;
+    public const int HealthNormalized = 0x890; // New: Float (0.0 - 1.0)
+    public const int SpawnState = 0x850; // FName
 
     // [UCharacterMovementComponent]
     public const int LocationX = 0x2D0;

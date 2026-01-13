@@ -22,7 +22,7 @@ public class OverlayForm : Form
     private const int SCREEN_WIDTH = 5120;
     private const int SCREEN_HEIGHT = 1440;
     private const int TARGET_FPS = 144;
-    private const float AIM_FOV_RADIUS = 100.0f;
+    private const float AIM_FOV_RADIUS = 500.0f;
 
     // [Core Components]
     private readonly MemoryReader _memory;
@@ -36,7 +36,7 @@ public class OverlayForm : Form
     private readonly object _dataLock = new object();
 
     // [State]
-    private bool _espEnabled = false;
+    private bool _espEnabled = true;
     private bool _drawLines = false;
     private bool _drawWeakspot = false;
     private bool _drawBox = false;
@@ -82,11 +82,20 @@ public class OverlayForm : Form
 
     public OverlayForm()
     {
-        _memory = new MemoryReader(); _gameReader = new GameDataReader(_memory); _w2s = new WorldToScreen(SCREEN_WIDTH, SCREEN_HEIGHT);
+        _memory = new MemoryReader();
+        _gameReader = new GameDataReader(_memory);
+        _w2s = new WorldToScreen(SCREEN_WIDTH, SCREEN_HEIGHT);
+
+        // [FIX 1] Start the background scanner here!
+        _gameReader.StartItemScanner();
+
         this.SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
         _enemyPen = new Pen(Color.Red, 2); _enemyPenFar = new Pen(Color.Orange, 2); _bonePen = new Pen(Color.Cyan, 1.5f); _linePen = new Pen(Color.FromArgb(150, Color.Yellow), 1); _fovPen = new Pen(Color.FromArgb(50, 255, 255, 255), 1);
         _menuBgBrush = new SolidBrush(Color.FromArgb(220, 35, 35, 35)); _headerBrush = new SolidBrush(Color.FromArgb(255, 58, 0, 90)); _borderPen = new Pen(Color.Black, 1); _textBrush = new SolidBrush(Color.FromArgb(230, 230, 230)); _onBrush = new SolidBrush(Color.FromArgb(0, 255, 100)); _offBrush = new SolidBrush(Color.FromArgb(150, 150, 150)); _boneBrush = new SolidBrush(Color.Cyan);
+
+        // ... (Font loading logic) ...
         try { if (File.Exists("font.ttf")) { _pfc.AddFontFile("font.ttf"); _titleFont = new Font(_pfc.Families[0], 12, FontStyle.Bold); _itemFont = new Font(_pfc.Families[0], 10, FontStyle.Regular); } else { _titleFont = new Font("Segoe UI", 10, FontStyle.Bold); _itemFont = new Font("Segoe UI", 9, FontStyle.Regular); } } catch { _titleFont = new Font("Segoe UI", 10, FontStyle.Bold); _itemFont = new Font("Segoe UI", 9, FontStyle.Regular); }
+
         InitializeOverlay();
         _logicThread = new Thread(LogicLoop) { IsBackground = true, Priority = ThreadPriority.Normal }; _logicThread.Start();
         _renderThread = new Thread(RenderLoop) { IsBackground = true, Priority = ThreadPriority.AboveNormal }; _renderThread.Start();
@@ -104,6 +113,7 @@ public class OverlayForm : Form
             while (frameTimer.ElapsedTicks - start < targetTicks) { Thread.Sleep(1); }
         }
     }
+
 
     private void LogicLoop()
     {
@@ -124,34 +134,125 @@ public class OverlayForm : Form
                         var newRenderList = new List<RenderEntity>();
                         foreach (var character in rawCharacters)
                         {
-                            if (character.IsPlayer) continue; if (character.Distance > 70) continue;
+                            if (character.IsPlayer) continue;
+                            if (character.Distance > 70) continue;
 
                             var renderEnt = new RenderEntity();
                             renderEnt.Distance = (float)character.Distance;
-                            // New Name Format: (69m) Root Flyer
                             renderEnt.LabelText = $"({character.Distance:F0}m) {character.DisplayName}";
 
                             var screenRoot = _w2s.Project(character.Location, camera.Value);
                             if (screenRoot.HasValue) renderEnt.RootPos = new Vector3(screenRoot.Value.X, screenRoot.Value.Y, 0);
 
+                            // --- [SMART BONE TARGETING] ---
                             if (character.Bones != null && character.Bones.Count > 0)
                             {
-                                // ... (Bone Processing kept same as before)
-                                Vector3? weakspot3D = null;
-                                if (character.WeakspotIndex != -1 && character.Bones.ContainsKey(character.WeakspotIndex)) { weakspot3D = character.Bones[character.WeakspotIndex]; renderEnt.LockReason = "CRITICAL"; renderEnt.LockColor = Brushes.Red; }
-                                double maxZ_T1 = -99999; Vector3? pos_T1 = null; double maxZ_T2 = -99999; Vector3? pos_T2 = null; double maxZ_T3 = -99999; Vector3? pos_T3 = null; double maxZ_Fallback = -99999; Vector3? pos_Fallback = null;
-                                IntPtr mesh = _memory.ReadPointer(character.Address + Offsets.Mesh);
-                                foreach (var kvp in character.Bones)
+                                // 1. First Pass: Find the "Height Map" of the monster
+                                double minZ = 999999;
+                                double maxZ = -999999;
+
+                                foreach (var bonePos in character.Bones.Values)
                                 {
-                                    int bIndex = kvp.Key; var bPos = kvp.Value;
-                                    if (_drawSkeleton) { var sPos = _w2s.Project(bPos, camera.Value); if (sPos.HasValue) { renderEnt.BoneScreenPos[bIndex] = new Vector3(sPos.Value.X, sPos.Value.Y, 0); if (_boneDisplayMode == 2) renderEnt.BoneNames[bIndex] = _gameReader.GetBoneName(mesh, bIndex); } }
-                                    string bName = _gameReader.GetBoneName(mesh, bIndex); string lowerName = bName.ToLower();
-                                    if (lowerName.Contains("weakpoint")) { if (bPos.Z > maxZ_T1) { maxZ_T1 = bPos.Z; pos_T1 = bPos; } } else if (lowerName.Contains("coll") || lowerName.Contains("eye") || lowerName.Contains("neck") || lowerName.Contains("pinky2") || lowerName.Contains("Middle2") || lowerName.Contains("mouth")) { if (bPos.Z > maxZ_T2) { maxZ_T2 = bPos.Z; pos_T2 = bPos; } } else if (lowerName.Contains("chest") || lowerName.Contains("spine") || lowerName.Contains("upper") || lowerName.Contains("ear")) { if (bPos.Z > maxZ_T3) { maxZ_T3 = bPos.Z; pos_T3 = bPos; } }
-                                    if (bPos.Z > maxZ_Fallback) { maxZ_Fallback = bPos.Z; pos_Fallback = bPos; }
+                                    if (bonePos.Z < minZ) minZ = bonePos.Z;
+                                    if (bonePos.Z > maxZ) maxZ = bonePos.Z;
                                 }
-                                if (weakspot3D == null) { if (pos_T1.HasValue) { weakspot3D = pos_T1; renderEnt.LockReason = "WEAKPOINT"; renderEnt.LockColor = Brushes.LimeGreen; } else if (pos_T2.HasValue) { weakspot3D = pos_T2; renderEnt.LockReason = "HEAD"; renderEnt.LockColor = Brushes.Cyan; } else if (pos_T3.HasValue) { weakspot3D = pos_T3; renderEnt.LockReason = "BODY"; renderEnt.LockColor = Brushes.Orange; } else if (pos_Fallback.HasValue) { weakspot3D = pos_Fallback; renderEnt.LockReason = "HEIGHT"; renderEnt.LockColor = Brushes.Gray; } }
-                                renderEnt.WeakspotPos = weakspot3D; if (weakspot3D.HasValue) { renderEnt.HasWeakspot = true; var w2sWeak = _w2s.Project(weakspot3D.Value, camera.Value); if (w2sWeak.HasValue) renderEnt.HeadPos = new Vector3(w2sWeak.Value.X, w2sWeak.Value.Y, 0); }
+
+                                // Define a "Waist Line" (Bottom 50% of the monster)
+                                // If a "Head" or "Neck" bone is below this, it is FAKE/BUGGED.
+                                double waistHeight = minZ + ((maxZ - minZ) * 0.5);
+
+                                // 2. Second Pass: Pick the best target
+                                Vector3? weakspot3D = null;
+
+                                // Priority A: Game-Defined Weakspot (The Spore/Glowing spot)
+                                // This is 100% accurate because the game logic uses it.
+                                if (character.WeakspotIndex != -1 && character.Bones.ContainsKey(character.WeakspotIndex))
+                                {
+                                    weakspot3D = character.Bones[character.WeakspotIndex];
+                                    renderEnt.LockReason = "CRITICAL";
+                                    renderEnt.LockColor = Brushes.Red;
+                                }
+
+                                // Priority B: Validated Bone Names (Head, Neck, Eye)
+                                if (weakspot3D == null)
+                                {
+                                    Vector3? bestNameMatch = null;
+                                    double bestNameZ = -99999;
+
+                                    // Loop through bones again to find name matches
+                                    IntPtr mesh = _memory.ReadPointer(character.Address + Offsets.Mesh);
+                                    foreach (var kvp in character.Bones)
+                                    {
+                                        int bIndex = kvp.Key;
+                                        var bPos = kvp.Value;
+
+                                        // (Optional: Fill visual bone list for Skeleton ESP)
+                                        if (_drawSkeleton)
+                                        {
+                                            var sPos = _w2s.Project(bPos, camera.Value);
+                                            if (sPos.HasValue)
+                                            {
+                                                renderEnt.BoneScreenPos[bIndex] = new Vector3(sPos.Value.X, sPos.Value.Y, 0);
+                                                if (_boneDisplayMode == 2) renderEnt.BoneNames[bIndex] = _gameReader.GetBoneName(mesh, bIndex);
+                                            }
+                                        }
+
+                                        string bName = _gameReader.GetBoneName(mesh, bIndex).ToLower();
+
+                                        // Check for high-priority keywords
+                                        bool isHead = bName.Contains("head") || bName.Contains("eye") || bName.Contains("mouth") || bName.Contains("face");
+                                        bool isNeck = bName.Contains("neck") || bName.Contains("spine3"); // Spine3 is usually high chest
+
+                                        if (isHead || isNeck)
+                                        {
+                                            // VALIDATION: Is this bone actually high up?
+                                            if (bPos.Z > waistHeight)
+                                            {
+                                                // Pick the highest one found so far
+                                                if (bPos.Z > bestNameZ)
+                                                {
+                                                    bestNameZ = bPos.Z;
+                                                    bestNameMatch = bPos;
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    if (bestNameMatch.HasValue)
+                                    {
+                                        weakspot3D = bestNameMatch;
+                                        renderEnt.LockReason = "HEAD/NECK";
+                                        renderEnt.LockColor = Brushes.Cyan;
+                                    }
+                                }
+
+                                // Priority C: Height Fallback (The "Spore on Arm" Catcher)
+                                // If we have no weakspot and no valid "Head" bone, just shoot the highest point.
+                                if (weakspot3D == null)
+                                {
+                                    // Find the bone closest to maxZ (The top of the mesh)
+                                    foreach (var bPos in character.Bones.Values)
+                                    {
+                                        if (Math.Abs(bPos.Z - maxZ) < 5.0f) // Within 5cm of top
+                                        {
+                                            weakspot3D = bPos;
+                                            renderEnt.LockReason = "HEIGHT";
+                                            renderEnt.LockColor = Brushes.Orange;
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                // Final Assignment
+                                renderEnt.WeakspotPos = weakspot3D;
+                                if (weakspot3D.HasValue)
+                                {
+                                    renderEnt.HasWeakspot = true;
+                                    var w2sWeak = _w2s.Project(weakspot3D.Value, camera.Value);
+                                    if (w2sWeak.HasValue) renderEnt.HeadPos = new Vector3(w2sWeak.Value.X, w2sWeak.Value.Y, 0);
+                                }
                             }
+
                             newRenderList.Add(renderEnt);
                         }
 
@@ -195,6 +296,11 @@ public class OverlayForm : Form
         CheckToggle((int)Keys.F9, () => _drawDist = !_drawDist);
         CheckToggle((int)Keys.F10, () => _drawSkeleton = !_drawSkeleton);
         CheckToggle((int)Keys.F11, () => { _boneDisplayMode++; if (_boneDisplayMode > 2) _boneDisplayMode = 0; });
+        CheckToggle((int)Keys.F12, () =>
+        {
+            _gameReader.DebugMode = !_gameReader.DebugMode;
+            Console.Beep(); // Audio cue that Debug Mode is toggled
+        });
         CheckToggle((int)Keys.Insert, () => _drawItems = !_drawItems); // New: Toggle Items with INSERT
         CheckToggle((int)Keys.End, () => { _isRunning = false; Application.Exit(); });
     }
@@ -213,7 +319,9 @@ public class OverlayForm : Form
             if (!attached || !enabled) return;
             float centerX = SCREEN_WIDTH / 2.0f; float centerY = SCREEN_HEIGHT / 2.0f;
             g.DrawEllipse(_fovPen, centerX - AIM_FOV_RADIUS, centerY - AIM_FOV_RADIUS, AIM_FOV_RADIUS * 2, AIM_FOV_RADIUS * 2);
-            Vector3? bestTargetPos = null; float closestDistToCrosshair = 99999f;
+            // 1. Initialize variables to track the CLOSEST enemy in the world
+            Vector3? bestTargetPos = null;
+            float closestWorldDist = 99999f; // We track World Distance now, not Screen Distance
 
             // Draw Enemies
             foreach (var ent in entities)
@@ -227,7 +335,25 @@ public class OverlayForm : Form
                 if (_drawBox) g.DrawRectangle(distColor, boxX, boxY, width, height);
                 if (_drawLines) { float targetX = ent.HeadPos.HasValue ? (float)ent.HeadPos.Value.X : (boxX + width / 2); float targetY = ent.HeadPos.HasValue ? (float)ent.HeadPos.Value.Y : (boxY + height / 2); g.DrawLine(_linePen, centerX, SCREEN_HEIGHT, targetX, targetY); }
                 if (_drawDist) { float estimatedWidth = ent.LabelText.Length * 6.0f; float textX = boxX + (width - estimatedWidth) / 2; float textY = boxY - 15; g.DrawString(ent.LabelText, _itemFont, Brushes.Salmon, textX, textY); } // Updated to use LabelText
-                if (ent.HasWeakspot && ent.HeadPos.HasValue && ent.WeakspotPos.HasValue) { float dx = (float)ent.HeadPos.Value.X - centerX; float dy = (float)ent.HeadPos.Value.Y - centerY; float dist = (float)Math.Sqrt(dx * dx + dy * dy); if (dist < AIM_FOV_RADIUS && dist < closestDistToCrosshair) { closestDistToCrosshair = dist; bestTargetPos = ent.WeakspotPos; } }
+                if (ent.HasWeakspot && ent.HeadPos.HasValue && ent.WeakspotPos.HasValue)
+                {
+                    // 1. Calculate Screen Distance (Is he in the circle?)
+                    float dx = (float)ent.HeadPos.Value.X - centerX;
+                    float dy = (float)ent.HeadPos.Value.Y - centerY;
+                    float screenDist = (float)Math.Sqrt(dx * dx + dy * dy);
+
+                    // 2. Check FOV
+                    if (screenDist < AIM_FOV_RADIUS)
+                    {
+                        // 3. Selection Rule: Pick the one CLOSEST TO ME (World Distance)
+                        // This prevents locking onto far enemies when a close one is available.
+                        if (ent.Distance < closestWorldDist)
+                        {
+                            closestWorldDist = ent.Distance;
+                            bestTargetPos = ent.WeakspotPos;
+                        }
+                    }
+                }
             }
 
             // Draw Items
@@ -242,7 +368,34 @@ public class OverlayForm : Form
                 }
             }
 
-            if (bestTargetPos.HasValue && (GetAsyncKeyState(0x02) & 0x8000) != 0) { var screenTarget = _w2s.Project(bestTargetPos.Value, cam); if (screenTarget.HasValue) { float deltaX = (float)screenTarget.Value.X - centerX; float deltaY = (float)screenTarget.Value.Y - centerY; mouse_event(MOUSEEVENTF_MOVE, (int)deltaX, (int)deltaY, 0, 0); } }
+            if (bestTargetPos.HasValue && (GetAsyncKeyState(0x02) & 0x8000) != 0)
+            {
+                var screenTarget = _w2s.Project(bestTargetPos.Value, cam);
+                if (screenTarget.HasValue)
+                {
+                    float deltaX = (float)screenTarget.Value.X - centerX;
+                    float deltaY = (float)screenTarget.Value.Y - centerY;
+
+                    // [FIX 1] Deadzone (Stop shaking if we are close enough)
+                    // If we are within 2 pixels, just stop aiming.
+                    if (Math.Abs(deltaX) < 2 && Math.Abs(deltaY) < 2) return;
+
+                    // [FIX 2] Smoothing (The "Humanizer")
+                    // Instead of moving 100% of the way, move 10% or 20% per frame.
+                    // Increase this number to make it smoother/slower. Decrease for snappier.
+                    float smooth = 3.0f;
+
+                    int moveX = (int)(deltaX / smooth);
+                    int moveY = (int)(deltaY / smooth);
+
+                    // Optional: Minimum move check to prevent "stuck" feeling
+                    // If we need to move but the smoothing makes it 0, force it to 1.
+                    if (moveX == 0 && Math.Abs(deltaX) > 2) moveX = deltaX > 0 ? 1 : -1;
+                    if (moveY == 0 && Math.Abs(deltaY) > 2) moveY = deltaY > 0 ? 1 : -1;
+
+                    mouse_event(MOUSEEVENTF_MOVE, moveX, moveY, 0, 0);
+                }
+            }
             UpdateFPS();
         }
         catch { }
