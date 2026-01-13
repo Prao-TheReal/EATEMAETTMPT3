@@ -10,11 +10,16 @@ public static class Offsets
 
     // [UWorld]
     public const int GameInstance = 0x1B8;
-    public const int PersistentLevel = 0x30; // New: To find Items
+    public const int PersistentLevel = 0x30;
+    public const int Levels = 0x170; // <--- ADD THIS (TArray<ULevel*>)
 
     // [ULevel]
     public const int ActorsTArray = 0x98; // New: TArray<AActor*>
     public const int ActorsCount = 0xA0;
+
+    // [New Offsets for Filtering]
+    public const int ActorOwner = 0x140;       // AActor -> Owner
+    public const int AcknowledgedPawn = 0x338; // PlayerController -> AcknowledgedPawn
 
     // [LocalPlayer]
     public const int LocalPlayers = 0x38;

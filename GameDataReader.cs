@@ -7,6 +7,9 @@ namespace Remnant2ESP;
 
 public class GameDataReader
 {
+    public IntPtr LocalPawn { get; private set; } = IntPtr.Zero;
+    private List<ItemData> _cachedItems = new();
+    private DateTime _lastItemUpdate = DateTime.MinValue;
     private readonly MemoryReader _memory;
     private IntPtr _gWorld;
     private NameReader? _nameReader;
@@ -46,14 +49,41 @@ public class GameDataReader
     {
         try
         {
-            if (_gWorld == IntPtr.Zero) UpdateBaseAddress(); var world = _memory.ReadPointer(_gWorld); if (world == IntPtr.Zero) return null;
-            var gameInstance = _memory.ReadPointer(IntPtr.Add(world, Offsets.GameInstance)); if (gameInstance == IntPtr.Zero) return null;
-            var localPlayersData = _memory.ReadPointer(IntPtr.Add(gameInstance, Offsets.LocalPlayers)); if (localPlayersData == IntPtr.Zero) return null;
-            var localPlayer = _memory.ReadPointer(IntPtr.Add(localPlayersData, Offsets.LocalPlayer_First)); if (localPlayer == IntPtr.Zero) return null;
+            if (_gWorld == IntPtr.Zero) UpdateBaseAddress();
+            var world = _memory.ReadPointer(_gWorld);
+            if (world == IntPtr.Zero) return null;
+
+            var gameInstance = _memory.ReadPointer(IntPtr.Add(world, Offsets.GameInstance));
+            if (gameInstance == IntPtr.Zero) return null;
+
+            var localPlayersData = _memory.ReadPointer(IntPtr.Add(gameInstance, Offsets.LocalPlayers));
+            if (localPlayersData == IntPtr.Zero) return null;
+
+            var localPlayer = _memory.ReadPointer(IntPtr.Add(localPlayersData, Offsets.LocalPlayer_First));
+            if (localPlayer == IntPtr.Zero) return null;
+
             LocalPlayerAddress = localPlayer;
-            var playerController = _memory.ReadPointer(IntPtr.Add(localPlayer, Offsets.PlayerController)); if (playerController == IntPtr.Zero) return null;
-            var cameraManager = _memory.ReadPointer(IntPtr.Add(playerController, Offsets.CameraManager)); if (cameraManager == IntPtr.Zero) return null;
-            return new CameraData { Location = new Vector3(_memory.ReadDouble(IntPtr.Add(cameraManager, Offsets.CameraX)), _memory.ReadDouble(IntPtr.Add(cameraManager, Offsets.CameraY)), _memory.ReadDouble(IntPtr.Add(cameraManager, Offsets.CameraZ))), Pitch = _memory.ReadDouble(IntPtr.Add(cameraManager, Offsets.CameraPitch)), Yaw = _memory.ReadDouble(IntPtr.Add(cameraManager, Offsets.CameraYaw)), FOV = _memory.ReadFloat(IntPtr.Add(cameraManager, Offsets.CameraFOV)) };
+
+            var playerController = _memory.ReadPointer(IntPtr.Add(localPlayer, Offsets.PlayerController));
+            if (playerController == IntPtr.Zero) return null;
+
+            // [FIX] Read the actual Character (Pawn) so we know who "We" are
+            LocalPawn = _memory.ReadPointer(playerController + Offsets.AcknowledgedPawn);
+
+            var cameraManager = _memory.ReadPointer(IntPtr.Add(playerController, Offsets.CameraManager));
+            if (cameraManager == IntPtr.Zero) return null;
+
+            return new CameraData
+            {
+                Location = new Vector3(
+                    _memory.ReadDouble(IntPtr.Add(cameraManager, Offsets.CameraX)),
+                    _memory.ReadDouble(IntPtr.Add(cameraManager, Offsets.CameraY)),
+                    _memory.ReadDouble(IntPtr.Add(cameraManager, Offsets.CameraZ))
+                ),
+                Pitch = _memory.ReadDouble(IntPtr.Add(cameraManager, Offsets.CameraPitch)),
+                Yaw = _memory.ReadDouble(IntPtr.Add(cameraManager, Offsets.CameraYaw)),
+                FOV = _memory.ReadFloat(IntPtr.Add(cameraManager, Offsets.CameraFOV))
+            };
         }
         catch { return null; }
     }
@@ -140,107 +170,133 @@ public class GameDataReader
     }
 
     public List<ItemData> GetItems(CameraData camera)
-{
-    var items = new List<ItemData>();
-    if (!_gNamesFound) return items;
-
-    try
     {
-        var world = _memory.ReadPointer(_gWorld); if (world == IntPtr.Zero) return items;
-        var persistentLevel = _memory.ReadPointer(world + Offsets.PersistentLevel); if (persistentLevel == IntPtr.Zero) return items;
-        var actorsArray = _memory.ReadPointer(persistentLevel + Offsets.ActorsTArray);
-        var actorsCount = _memory.ReadInt32(persistentLevel + Offsets.ActorsCount);
+        // [PERFORMANCE] Cache check
+        // This isn't "sleeping", it's reusing old data to save CPU. 
+        // If you remove this, your FPS will drop significantly.
+        if ((DateTime.Now - _lastItemUpdate).TotalMilliseconds < 2000) return _cachedItems;
 
-        if (actorsCount <= 0 || actorsCount > 5000) return items;
+        var items = new List<ItemData>();
+        if (!_gNamesFound) return items;
 
-        for (int i = 0; i < Math.Min(actorsCount, 2000); i++)
+        try
         {
-            IntPtr actorAddr = _memory.ReadPointer(actorsArray + (i * 8));
-            if (actorAddr == IntPtr.Zero) continue;
+            var world = _memory.ReadPointer(_gWorld);
+            if (world == IntPtr.Zero) return items;
 
-            int id = _memory.ReadInt32(actorAddr + Offsets.ActorID);
-            string name = _nameReader.GetName(id);
+            var levelsArray = _memory.ReadPointer(world + Offsets.Levels);
+            var levelsCount = _memory.ReadInt32(world + Offsets.Levels + 8);
 
-                // Filter for Items
-                bool isItem = name.Contains("Item_") || name.Contains("Relic_") || name.Contains("Ring_") ||
-                  name.Contains("Amulet_") || name.Contains("Weapon_") ||
-                  name.Contains("Ammo") || name.Contains("Scrap") || name.Contains("Iron") ||
-                  name.Contains("Forged") || name.Contains("Galvanized") || name.Contains("Hardened") ||
-                  name.Contains("Simulacrum") || name.Contains("Lumenite");
-                if (!isItem || name.Contains("Default__") || name.Contains("Manager") || name.Contains("Context")) continue;
+            if (levelsArray == IntPtr.Zero || levelsCount <= 0 || levelsCount > 1000) return items;
 
-                // --- [FIX START] ABSOLUTE LOCATION READING ---
-
-                Vector3 location = new Vector3(0, 0, 0);
-
-                // 1. Get Root Component
-                IntPtr rootComp = _memory.ReadPointer(actorAddr + Offsets.RootComponent);
-
-                if (rootComp != IntPtr.Zero)
-                {
-                    // STRATEGY CHANGE: Read ComponentToWorld instead of RelativeLocation.
-                    // ComponentToWorld is a matrix. The Position (Translation) usually starts at offset 0x20 (for doubles).
-
-                    // Note: We use the same ComponentToWorld offset you used in your Skeleton function
-                    IntPtr c2wBase = rootComp + Offsets.ComponentToWorld;
-
-                    // The Translation (XYZ) is at 0x20 inside the ComponentToWorld struct
-                    double absX = _memory.ReadDouble(c2wBase + 0x20);
-                    double absY = _memory.ReadDouble(c2wBase + 0x28);
-                    double absZ = _memory.ReadDouble(c2wBase + 0x30);
-
-                    location = new Vector3(absX, absY, absZ);
-                }
-
-                // 2. Fallback: If Root failed or gave (0,0,0), try the Mesh Component
-                if (location.X == 0 && location.Y == 0)
-                {
-                    IntPtr mesh = _memory.ReadPointer(actorAddr + Offsets.Mesh);
-                    if (mesh != IntPtr.Zero)
-                    {
-                        IntPtr c2wBase = mesh + Offsets.ComponentToWorld;
-                        double absX = _memory.ReadDouble(c2wBase + 0x20);
-                        double absY = _memory.ReadDouble(c2wBase + 0x28);
-                        double absZ = _memory.ReadDouble(c2wBase + 0x30);
-
-                        location = new Vector3(absX, absY, absZ);
-                    }
-                }
-
-                // 3. DEBUG: Check console to see if we are still getting Zeros
-                if (location.X == 0 && location.Y == 0)
-                {
-                    // Uncomment this if you still see nothing, it will spam console with failed items
-                    // Console.WriteLine($"[ESP DEBUG] {name} is STUCK at 0,0,0");
-                    continue;
-                }
-                // --- [FIX END] ---
-
-                double dist = location.Distance(camera.Location) / 100.0;
-            if (dist > 100) continue; 
-
-            Color color = Color.White;
-            if (name.Contains("Relic")) color = Color.Orange;
-            else if (name.Contains("Ring") || name.Contains("Amulet")) color = Color.Purple;
-            else if (name.Contains("Quest")) color = Color.Cyan;
-            else if (name.Contains("Scrap")) color = Color.Gray;
-            else if (name.Contains("Iron")) color = Color.LightGreen;
-            else if (name.Contains("Ammo")) color = Color.Yellow;
-
-            items.Add(new ItemData
+            for (int l = 0; l < levelsCount; l++)
             {
-                Address = actorAddr,
-                Name = name,
-                DisplayName = CleanName(name),
-                Location = location,
-                Distance = dist,
-                RarityColor = color
-            });
+                IntPtr levelAddr = _memory.ReadPointer(levelsArray + (l * 8));
+                if (levelAddr == IntPtr.Zero) continue;
+
+                var actorsArray = _memory.ReadPointer(levelAddr + Offsets.ActorsTArray);
+                var actorsCount = _memory.ReadInt32(levelAddr + Offsets.ActorsCount);
+
+                if (actorsCount <= 0 || actorsCount > 10000) continue;
+
+                for (int i = 0; i < actorsCount; i++)
+                {
+                    IntPtr actorAddr = _memory.ReadPointer(actorsArray + (i * 8));
+                    if (actorAddr == IntPtr.Zero) continue;
+
+                    // [OWNER CHECK] Hide items owned by the player (Equipped Gear)
+                    IntPtr owner = _memory.ReadPointer(actorAddr + Offsets.ActorOwner);
+                    if (owner != IntPtr.Zero && owner == LocalPawn) continue;
+
+                    int id = _memory.ReadInt32(actorAddr + Offsets.ActorID);
+                    string name = _nameReader.GetName(id);
+
+                    // --- 1. YOUR CUSTOM FILTERS ---
+                    bool isItem = name.Contains("Ring_") || name.Contains("Quest_") || name.Contains("Relic") || name.Contains("Weapon_") ||
+                                  name.Contains("Amulet") || name.Contains("drop") || name.Contains("Loot") ||
+                                  name.Contains("Ammo") || name.Contains("Scrap") || name.Contains("Iron") ||
+                                  name.Contains("Forged") || name.Contains("Galvanized") || name.Contains("Hardened") ||
+                                  name.Contains("Simulacrum") || name.Contains("Lumenite") || name.Contains("Hidden") || name.Contains("Book") ||
+                                  name.Contains("Chest") || name.Contains("Container") || name.Contains("Resource") ||
+                                  name.Contains("Material") ||
+                                  name.Contains("Item_") || name.Contains("Weapon_");
+
+                    // Garbage filter
+                    if (name.Contains("Default__") || name.Contains("Context") || name.Contains("3D") || name.Contains("Tree") || name.Contains("Leaves") || name.Contains("Dynamic") || name.Contains("Spawn") || name.Contains("Char") || name.Contains("FX") || name.Contains("Mesh") || name.Contains("Rock") || name.Contains("Zig") || name.Contains("Floor") || name.Contains("AI") || name.Contains("Vase") || name.Contains("Pot") || name.Contains("Pan") || name.Contains("VFX") || name.Contains("Sound") ||
+                        name.Contains("Decal") || name.Contains("Volume") || name.Contains("Trigger") || name.Contains("Tile") || name.Contains("Camera"))
+                    {
+                        isItem = false;
+                    }
+
+                    // If it's not an item, SKIP EVERYTHING ELSE (Saves CPU)
+                    if (!isItem) continue;
+
+                    // --- 2. GET LOCATION (Only calculate if it IS an item) ---
+                    Vector3 location = new Vector3(0, 0, 0);
+                    IntPtr rootComp = _memory.ReadPointer(actorAddr + Offsets.RootComponent);
+
+                    if (rootComp != IntPtr.Zero)
+                    {
+                        IntPtr c2w = rootComp + Offsets.ComponentToWorld;
+                        location = new Vector3(
+                            _memory.ReadDouble(c2w + 0x20),
+                            _memory.ReadDouble(c2w + 0x28),
+                            _memory.ReadDouble(c2w + 0x30)
+                        );
+                    }
+
+                    if (location.X == 0 && location.Y == 0)
+                    {
+                        IntPtr mesh = _memory.ReadPointer(actorAddr + Offsets.Mesh);
+                        if (mesh != IntPtr.Zero)
+                        {
+                            IntPtr c2w = mesh + Offsets.ComponentToWorld;
+                            location = new Vector3(
+                                _memory.ReadDouble(c2w + 0x20),
+                                _memory.ReadDouble(c2w + 0x28),
+                                _memory.ReadDouble(c2w + 0x30)
+                            );
+                        }
+                    }
+
+                    if (location.X == 0 && location.Y == 0) continue;
+
+                    double dist = location.Distance(camera.Location) / 100.0;
+                    if (dist > 150) continue;
+
+                    // --- [DISABLED OUTPUT] ---
+                    // I commented this out. Uncomment it only if you need to debug again.
+                    // System.Diagnostics.Debug.WriteLine($"[CHECK] Name: {name} | Loc: {location.X}");
+
+                    Color color = Color.White;
+                    if (name.Contains("Relic") || name.Contains("Gem") || name.Contains("Material")) color = Color.Orange;
+                    else if (name.Contains("Ring") || name.Contains("Amulet")) color = Color.Purple;
+                    else if (name.Contains("Simulacrum")) color = Color.Red;
+                    else if (name.Contains("Lumenite")) color = Color.LightPink;
+                    else if (name.Contains("Scrap")) color = Color.Gray;
+                    else if (name.Contains("Iron")) color = Color.LightGreen;
+                    else if (name.Contains("Ammo")) color = Color.Yellow;
+                    else if (name.Contains("Book")) color = Color.Blue;
+                    else if (name.Contains("Chest")) color = Color.Cyan;
+
+                    items.Add(new ItemData
+                    {
+                        Address = actorAddr,
+                        Name = name,
+                        DisplayName = CleanName(name),
+                        Location = location,
+                        Distance = dist,
+                        RarityColor = color
+                    });
+                }
+            }
         }
+        catch { }
+
+        _cachedItems = items;
+        _lastItemUpdate = DateTime.Now;
+        return items;
     }
-    catch { }
-    return items;
-}
 
     private IntPtr GetCharacterManager() { try { var world = _memory.ReadPointer(_gWorld); if (world == IntPtr.Zero) return IntPtr.Zero; var gameInstance = _memory.ReadPointer(IntPtr.Add(world, Offsets.GameInstance)); if (gameInstance == IntPtr.Zero) return IntPtr.Zero; var p1 = _memory.ReadPointer(IntPtr.Add(gameInstance, Offsets.CharPath_288)); if (p1 == IntPtr.Zero) return IntPtr.Zero; var charMgr = _memory.ReadPointer(IntPtr.Add(p1, Offsets.CharPath_B10)); return charMgr; } catch { return IntPtr.Zero; } }
 
