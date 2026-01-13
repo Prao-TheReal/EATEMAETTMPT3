@@ -22,7 +22,7 @@ public class OverlayForm : Form
     private const int SCREEN_WIDTH = 5120;
     private const int SCREEN_HEIGHT = 1440;
     private const int TARGET_FPS = 144;
-    private const float AIM_FOV_RADIUS = 500.0f;
+    private const float AIM_FOV_RADIUS = 351.0f;
 
     // [Core Components]
     private readonly MemoryReader _memory;
@@ -378,25 +378,28 @@ public class OverlayForm : Form
 
                     // [FIX 1] Deadzone (Stop shaking if we are close enough)
                     // If we are within 2 pixels, just stop aiming.
-                    if (Math.Abs(deltaX) < 2 && Math.Abs(deltaY) < 2) return;
+                    if (Math.Abs(deltaX) < 2 && Math.Abs(deltaY) < 2)
+                    {
+                        // Do nothing (just wait)
+                    }
+                    else
+                    {
+                        // Run the smoothing and mouse_event logic here
+                        float smooth = 4.5f;
 
-                    // [FIX 2] Smoothing (The "Humanizer")
-                    // Instead of moving 100% of the way, move 10% or 20% per frame.
-                    // Increase this number to make it smoother/slower. Decrease for snappier.
-                    float smooth = 3.0f;
+                        int moveX = (int)(deltaX / smooth);
+                        int moveY = (int)(deltaY / smooth);
 
-                    int moveX = (int)(deltaX / smooth);
-                    int moveY = (int)(deltaY / smooth);
+                        // Optional: Minimum move check to prevent "stuck" feeling
+                        // If we need to move but the smoothing makes it 0, force it to 1.
+                        if (moveX == 0 && Math.Abs(deltaX) > 2) moveX = deltaX > 0 ? 1 : -1;
+                        if (moveY == 0 && Math.Abs(deltaY) > 2) moveY = deltaY > 0 ? 1 : -1;
 
-                    // Optional: Minimum move check to prevent "stuck" feeling
-                    // If we need to move but the smoothing makes it 0, force it to 1.
-                    if (moveX == 0 && Math.Abs(deltaX) > 2) moveX = deltaX > 0 ? 1 : -1;
-                    if (moveY == 0 && Math.Abs(deltaY) > 2) moveY = deltaY > 0 ? 1 : -1;
-
-                    mouse_event(MOUSEEVENTF_MOVE, moveX, moveY, 0, 0);
+                        mouse_event(MOUSEEVENTF_MOVE, moveX, moveY, 0, 0);
+                    }
                 }
+                UpdateFPS();
             }
-            UpdateFPS();
         }
         catch { }
     }
