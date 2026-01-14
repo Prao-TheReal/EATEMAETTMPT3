@@ -24,6 +24,16 @@ public class OverlayForm : Form
     private const int TARGET_FPS = 144;
     private const float AIM_FOV_RADIUS = 351.0f;
 
+    // --- [CUSTOM OVERRIDES] ---
+    private readonly Dictionary<string, string> _customBoneOverrides = new()
+    {
+        { "Root_Flyer", "weakpoint_01_L" },
+        { "Char_Nemesis", "Bone_RN_Coll" },
+        { "RootZombie_C", "LoinStrap_01" },
+        { "Zombie", "LoinStrap_01" },
+        { "Char_RootZombie_", "Hand_L" }
+    };
+
     // [Core Components]
     private readonly MemoryReader _memory;
     private readonly GameDataReader _gameReader;
@@ -42,7 +52,7 @@ public class OverlayForm : Form
     private bool _drawBox = false;
     private bool _drawDist = false;
     private bool _drawSkeleton = false;
-    private bool _drawItems = true;     // New: Item Toggle
+    private bool _drawItems = true;
     private int _boneDisplayMode = 0;
     private Dictionary<int, bool> _keyToggleState = new Dictionary<int, bool>();
     private bool _isAttached = false;
@@ -50,8 +60,7 @@ public class OverlayForm : Form
 
     // [Render Caches]
     private List<RenderEntity> _renderList = new();
-    private List<RenderItem> _renderItems = new(); // New
-    private CameraData _lastCamera;
+    private List<RenderItem> _renderItems = new();
     private int _frameCount = 0;
     private DateTime _lastFpsTime = DateTime.Now;
     private int _currentFps = 0;
@@ -61,20 +70,29 @@ public class OverlayForm : Form
     private readonly Brush _menuBgBrush; private readonly Brush _headerBrush; private readonly Pen _borderPen; private readonly Brush _textBrush; private readonly Brush _onBrush; private readonly Brush _offBrush; private readonly Brush _boneBrush;
     private PrivateFontCollection _pfc = new PrivateFontCollection(); private readonly Font _titleFont; private readonly Font _itemFont;
 
-    // [Render Entities]
+    // [Render Entities - NOW STORING WORLD POSITIONS]
     public class RenderEntity
     {
-        public Vector3? RootPos; public Vector3? WeakspotPos; public Vector3? HeadPos;
-        public float Distance;
-        public string LabelText = ""; // Changed from DistText
-        public bool IsVisible = false; public bool HasWeakspot = false;
-        public Dictionary<int, Vector3> BoneScreenPos = new(); public Dictionary<int, string> BoneNames = new();
-        public string LockReason = ""; public Brush LockColor = Brushes.White;
+        // We store WORLD coordinates here, not Screen coordinates.
+        public Vector3 WorldRoot;
+        public Vector3? WorldWeakspot;
+        public Vector3? WorldHead;
+
+        public float Distance; // Cached distance for sorting
+        public string LabelText = "";
+        public bool IsVisible = false;
+        public bool HasWeakspot = false;
+
+        // Store Bones as WORLD positions
+        public Dictionary<int, Vector3> BoneWorldPos = new();
+        public Dictionary<int, string> BoneNames = new();
+        public string LockReason = "";
+        public Brush LockColor = Brushes.White;
     }
 
     public class RenderItem
     {
-        public Vector3 ScreenPos;
+        public Vector3 WorldPos; // Store World Pos
         public string Text;
         public Brush Color;
         public float Distance;
@@ -86,14 +104,12 @@ public class OverlayForm : Form
         _gameReader = new GameDataReader(_memory);
         _w2s = new WorldToScreen(SCREEN_WIDTH, SCREEN_HEIGHT);
 
-        // [FIX 1] Start the background scanner here!
         _gameReader.StartItemScanner();
 
         this.SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
         _enemyPen = new Pen(Color.Red, 2); _enemyPenFar = new Pen(Color.Orange, 2); _bonePen = new Pen(Color.Cyan, 1.5f); _linePen = new Pen(Color.FromArgb(150, Color.Yellow), 1); _fovPen = new Pen(Color.FromArgb(50, 255, 255, 255), 1);
         _menuBgBrush = new SolidBrush(Color.FromArgb(220, 35, 35, 35)); _headerBrush = new SolidBrush(Color.FromArgb(255, 58, 0, 90)); _borderPen = new Pen(Color.Black, 1); _textBrush = new SolidBrush(Color.FromArgb(230, 230, 230)); _onBrush = new SolidBrush(Color.FromArgb(0, 255, 100)); _offBrush = new SolidBrush(Color.FromArgb(150, 150, 150)); _boneBrush = new SolidBrush(Color.Cyan);
 
-        // ... (Font loading logic) ...
         try { if (File.Exists("font.ttf")) { _pfc.AddFontFile("font.ttf"); _titleFont = new Font(_pfc.Families[0], 12, FontStyle.Bold); _itemFont = new Font(_pfc.Families[0], 10, FontStyle.Regular); } else { _titleFont = new Font("Segoe UI", 10, FontStyle.Bold); _itemFont = new Font("Segoe UI", 9, FontStyle.Regular); } } catch { _titleFont = new Font("Segoe UI", 10, FontStyle.Bold); _itemFont = new Font("Segoe UI", 9, FontStyle.Regular); }
 
         InitializeOverlay();
@@ -114,7 +130,6 @@ public class OverlayForm : Form
         }
     }
 
-
     private void LogicLoop()
     {
         while (_isRunning)
@@ -125,90 +140,112 @@ public class OverlayForm : Form
                 try
                 {
                     var info = _gameReader.GetDebugInfo();
+                    // We grab camera here for Distance calc, but we will grab it AGAIN in OnPaint for drawing
                     var camera = _gameReader.GetCameraData();
 
                     if (camera.HasValue && camera.Value.IsValid)
                     {
-                        // 1. Process Enemies
                         var rawCharacters = _gameReader.GetAllCharacters(camera.Value);
                         var newRenderList = new List<RenderEntity>();
+
                         foreach (var character in rawCharacters)
                         {
                             if (character.IsPlayer) continue;
-                            if (character.Distance > 70) continue;
+                            if (character.Distance > 150) continue; // Optimization: Don't process far entities
 
                             var renderEnt = new RenderEntity();
                             renderEnt.Distance = (float)character.Distance;
-                            renderEnt.LabelText = $"({character.Distance:F0}m) {character.DisplayName}";
+                            renderEnt.LabelText = $"[{character.Name}] {character.Distance:F0}m";
 
-                            var screenRoot = _w2s.Project(character.Location, camera.Value);
-                            if (screenRoot.HasValue) renderEnt.RootPos = new Vector3(screenRoot.Value.X, screenRoot.Value.Y, 0);
+                            // [CHANGE] Store WORLD Position, do not Project yet!
+                            renderEnt.WorldRoot = character.Location;
 
-                            // --- [SMART BONE TARGETING] ---
                             if (character.Bones != null && character.Bones.Count > 0)
                             {
-                                // 1. First Pass: Find the "Height Map" of the monster
+                                IntPtr enemyMesh = _memory.ReadPointer(character.Address + Offsets.Mesh);
+                                bool isVis = _gameReader.IsVisible(enemyMesh);
+                                renderEnt.IsVisible = isVis;
+                                renderEnt.LockColor = isVis ? Brushes.LimeGreen : Brushes.Red;
+                                if (isVis) renderEnt.LockReason = "[VIS]";
+
                                 double minZ = 999999;
                                 double maxZ = -999999;
-
                                 foreach (var bonePos in character.Bones.Values)
                                 {
                                     if (bonePos.Z < minZ) minZ = bonePos.Z;
                                     if (bonePos.Z > maxZ) maxZ = bonePos.Z;
                                 }
-
-                                // Define a "Waist Line" (Bottom 50% of the monster)
-                                // If a "Head" or "Neck" bone is below this, it is FAKE/BUGGED.
                                 double waistHeight = minZ + ((maxZ - minZ) * 0.5);
-
-                                // 2. Second Pass: Pick the best target
                                 Vector3? weakspot3D = null;
 
-                                // Priority A: Game-Defined Weakspot (The Spore/Glowing spot)
-                                // This is 100% accurate because the game logic uses it.
-                                if (character.WeakspotIndex != -1 && character.Bones.ContainsKey(character.WeakspotIndex))
+                                // Custom Overrides
+                                foreach (var overrideEntry in _customBoneOverrides)
                                 {
-                                    weakspot3D = character.Bones[character.WeakspotIndex];
-                                    renderEnt.LockReason = "CRITICAL";
-                                    renderEnt.LockColor = Brushes.Red;
+                                    if (character.Name.Contains(overrideEntry.Key, StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        int targetIndex = _gameReader.GetBoneIndexByName(enemyMesh, overrideEntry.Value);
+                                        if (targetIndex != -1 && character.Bones.ContainsKey(targetIndex))
+                                        {
+                                            weakspot3D = character.Bones[targetIndex];
+                                            renderEnt.LockReason = "OVERRIDE";
+                                            renderEnt.LockColor = Brushes.Cyan;
+                                            break;
+                                        }
+                                    }
                                 }
 
-                                // Priority B: Validated Bone Names (Head, Neck, Eye)
+                                // Priority A
+                                if (weakspot3D == null && character.WeakspotIndex != -1 && character.Bones.ContainsKey(character.WeakspotIndex))
+                                {
+                                    weakspot3D = character.Bones[character.WeakspotIndex];
+                                    renderEnt.LockReason = isVis ? "CRITICAL" : "CRITICAL (HID)";
+                                }
+
+                                // Priority B
+                                if (weakspot3D == null)
+                                {
+                                    foreach (var kvp in character.Bones)
+                                    {
+                                        string bName = _gameReader.GetBoneName(enemyMesh, kvp.Key).ToLower();
+                                        if (bName.Contains("weakpoint"))
+                                        {
+                                            if (kvp.Value.Z > waistHeight)
+                                            {
+                                                weakspot3D = kvp.Value;
+                                                renderEnt.LockReason = "WEAKPOINT";
+                                                renderEnt.LockColor = Brushes.Magenta;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Priority C
                                 if (weakspot3D == null)
                                 {
                                     Vector3? bestNameMatch = null;
                                     double bestNameZ = -99999;
 
-                                    // Loop through bones again to find name matches
-                                    IntPtr mesh = _memory.ReadPointer(character.Address + Offsets.Mesh);
                                     foreach (var kvp in character.Bones)
                                     {
                                         int bIndex = kvp.Key;
                                         var bPos = kvp.Value;
 
-                                        // (Optional: Fill visual bone list for Skeleton ESP)
+                                        // [CHANGE] Store Bone World Pos for later projection
                                         if (_drawSkeleton)
                                         {
-                                            var sPos = _w2s.Project(bPos, camera.Value);
-                                            if (sPos.HasValue)
-                                            {
-                                                renderEnt.BoneScreenPos[bIndex] = new Vector3(sPos.Value.X, sPos.Value.Y, 0);
-                                                if (_boneDisplayMode == 2) renderEnt.BoneNames[bIndex] = _gameReader.GetBoneName(mesh, bIndex);
-                                            }
+                                            renderEnt.BoneWorldPos[bIndex] = bPos;
+                                            if (_boneDisplayMode == 2) renderEnt.BoneNames[bIndex] = _gameReader.GetBoneName(enemyMesh, bIndex);
                                         }
 
-                                        string bName = _gameReader.GetBoneName(mesh, bIndex).ToLower();
-
-                                        // Check for high-priority keywords
+                                        string bName = _gameReader.GetBoneName(enemyMesh, bIndex).ToLower();
                                         bool isHead = bName.Contains("head") || bName.Contains("eye") || bName.Contains("mouth") || bName.Contains("face");
-                                        bool isNeck = bName.Contains("neck") || bName.Contains("spine3"); // Spine3 is usually high chest
+                                        bool isNeck = bName.Contains("neck");
 
                                         if (isHead || isNeck)
                                         {
-                                            // VALIDATION: Is this bone actually high up?
                                             if (bPos.Z > waistHeight)
                                             {
-                                                // Pick the highest one found so far
                                                 if (bPos.Z > bestNameZ)
                                                 {
                                                     bestNameZ = bPos.Z;
@@ -221,63 +258,55 @@ public class OverlayForm : Form
                                     if (bestNameMatch.HasValue)
                                     {
                                         weakspot3D = bestNameMatch;
-                                        renderEnt.LockReason = "HEAD/NECK";
-                                        renderEnt.LockColor = Brushes.Cyan;
+                                        renderEnt.LockReason = isVis ? "HEAD" : "HEAD (HID)";
                                     }
                                 }
 
-                                // Priority C: Height Fallback (The "Spore on Arm" Catcher)
-                                // If we have no weakspot and no valid "Head" bone, just shoot the highest point.
+                                // Priority D
                                 if (weakspot3D == null)
                                 {
-                                    // Find the bone closest to maxZ (The top of the mesh)
                                     foreach (var bPos in character.Bones.Values)
                                     {
-                                        if (Math.Abs(bPos.Z - maxZ) < 5.0f) // Within 5cm of top
+                                        if (Math.Abs(bPos.Z - maxZ) < 5.0f)
                                         {
                                             weakspot3D = bPos;
-                                            renderEnt.LockReason = "HEIGHT";
-                                            renderEnt.LockColor = Brushes.Orange;
+                                            renderEnt.LockReason = isVis ? "HEIGHT" : "HEIGHT (HID)";
                                             break;
                                         }
                                     }
                                 }
 
-                                // Final Assignment
-                                renderEnt.WeakspotPos = weakspot3D;
+                                if (weakspot3D.HasValue && (weakspot3D.Value.X == 0 && weakspot3D.Value.Y == 0))
+                                    weakspot3D = null;
+
+                                renderEnt.WorldWeakspot = weakspot3D;
                                 if (weakspot3D.HasValue)
                                 {
                                     renderEnt.HasWeakspot = true;
-                                    var w2sWeak = _w2s.Project(weakspot3D.Value, camera.Value);
-                                    if (w2sWeak.HasValue) renderEnt.HeadPos = new Vector3(w2sWeak.Value.X, w2sWeak.Value.Y, 0);
+                                    // We only store the WORLD position now. Projection happens in OnPaint.
+                                    renderEnt.WorldHead = weakspot3D.Value;
                                 }
                             }
-
                             newRenderList.Add(renderEnt);
                         }
 
-                        // 2. Process Items (New)
                         var newRenderItems = new List<RenderItem>();
                         if (_drawItems)
                         {
                             var rawItems = _gameReader.GetItems(camera.Value);
                             foreach (var item in rawItems)
                             {
-                                var screenPos = _w2s.Project(item.Location, camera.Value);
-                                if (screenPos.HasValue)
+                                newRenderItems.Add(new RenderItem
                                 {
-                                    newRenderItems.Add(new RenderItem
-                                    {
-                                        ScreenPos = new Vector3(screenPos.Value.X, screenPos.Value.Y, 0),
-                                        Text = $"[{item.DisplayName}] {item.Distance:F0}m",
-                                        Color = new SolidBrush(item.RarityColor),
-                                        Distance = (float)item.Distance
-                                    });
-                                }
+                                    WorldPos = item.Location, // Store World Pos
+                                    Text = $"[{item.DisplayName}] {item.Distance:F0}m",
+                                    Color = new SolidBrush(item.RarityColor),
+                                    Distance = (float)item.Distance
+                                });
                             }
                         }
 
-                        lock (_dataLock) { _lastCamera = camera.Value; _renderList = newRenderList; _renderItems = newRenderItems; _debugInfo = info; }
+                        lock (_dataLock) { _renderList = newRenderList; _renderItems = newRenderItems; _debugInfo = info; }
                     }
                 }
                 catch { }
@@ -296,12 +325,8 @@ public class OverlayForm : Form
         CheckToggle((int)Keys.F9, () => _drawDist = !_drawDist);
         CheckToggle((int)Keys.F10, () => _drawSkeleton = !_drawSkeleton);
         CheckToggle((int)Keys.F11, () => { _boneDisplayMode++; if (_boneDisplayMode > 2) _boneDisplayMode = 0; });
-        CheckToggle((int)Keys.F12, () =>
-        {
-            _gameReader.DebugMode = !_gameReader.DebugMode;
-            Console.Beep(); // Audio cue that Debug Mode is toggled
-        });
-        CheckToggle((int)Keys.Insert, () => _drawItems = !_drawItems); // New: Toggle Items with INSERT
+        CheckToggle((int)Keys.F12, () => { _gameReader.DebugMode = !_gameReader.DebugMode; Console.Beep(); });
+        CheckToggle((int)Keys.Insert, () => _drawItems = !_drawItems);
         CheckToggle((int)Keys.End, () => { _isRunning = false; Application.Exit(); });
     }
 
@@ -313,93 +338,142 @@ public class OverlayForm : Form
             var g = e.Graphics;
             g.CompositingMode = CompositingMode.SourceOver; g.CompositingQuality = CompositingQuality.HighSpeed; g.InterpolationMode = InterpolationMode.Low; g.SmoothingMode = SmoothingMode.None; g.PixelOffsetMode = PixelOffsetMode.HighSpeed; g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
             g.Clear(Color.Black);
-            List<RenderEntity> entities; List<RenderItem> items; CameraData cam; bool attached; bool enabled;
-            lock (_dataLock) { entities = new List<RenderEntity>(_renderList); items = new List<RenderItem>(_renderItems); cam = _lastCamera; attached = _isAttached; enabled = _espEnabled; }
-            DrawInfoPanel(g, cam, _debugInfo, attached, enabled);
+
+            // [KEY CHANGE] Get FRESH Camera Data right now for drawing
+            // This decouples the camera rotation from the entity search lag
+            CameraData? cam = _gameReader.GetCameraData();
+            if (!cam.HasValue) return; // Can't draw without camera
+
+            List<RenderEntity> entities; List<RenderItem> items; bool attached; bool enabled;
+            lock (_dataLock) { entities = new List<RenderEntity>(_renderList); items = new List<RenderItem>(_renderItems); attached = _isAttached; enabled = _espEnabled; }
+
+            DrawInfoPanel(g, cam.Value, _debugInfo, attached, enabled);
             if (!attached || !enabled) return;
+
             float centerX = SCREEN_WIDTH / 2.0f; float centerY = SCREEN_HEIGHT / 2.0f;
             g.DrawEllipse(_fovPen, centerX - AIM_FOV_RADIUS, centerY - AIM_FOV_RADIUS, AIM_FOV_RADIUS * 2, AIM_FOV_RADIUS * 2);
-            // 1. Initialize variables to track the CLOSEST enemy in the world
-            Vector3? bestTargetPos = null;
-            float closestWorldDist = 99999f; // We track World Distance now, not Screen Distance
 
-            // Draw Enemies
+            Vector3? bestTargetPos = null;
+            float closestWorldDist = 99999f;
+
             foreach (var ent in entities)
             {
-                if (_drawSkeleton && ent.BoneScreenPos.Count > 0) { foreach (var kvp in ent.BoneScreenPos) { var pos = kvp.Value; if (pos.X > -100 && pos.X < SCREEN_WIDTH + 100 && pos.Y > -100 && pos.Y < SCREEN_HEIGHT + 100) { g.FillRectangle(_boneBrush, (float)pos.X - 1, (float)pos.Y - 1, 3, 3); if (_boneDisplayMode == 1) g.DrawString(kvp.Key.ToString(), _itemFont, Brushes.White, (float)pos.X, (float)pos.Y - 10); else if (_boneDisplayMode == 2 && ent.BoneNames.ContainsKey(kvp.Key)) g.DrawString(ent.BoneNames[kvp.Key], _itemFont, Brushes.LightGreen, (float)pos.X, (float)pos.Y - 10); } } }
-                if (_drawWeakspot && ent.HeadPos.HasValue) { var hPos = ent.HeadPos.Value; g.DrawEllipse(_enemyPen, (float)hPos.X - 4, (float)hPos.Y - 4, 8, 8); g.FillRectangle(Brushes.Red, (float)hPos.X - 2, (float)hPos.Y - 2, 4, 4); g.DrawString(ent.LockReason, _itemFont, ent.LockColor, (float)hPos.X + 6, (float)hPos.Y - 6); }
+                // [PROJECT ENTITY ROOT]
+                var screenRoot = _w2s.Project(ent.WorldRoot, cam.Value);
+                if (!screenRoot.HasValue) continue;
+                Vector3 rootScreen = new Vector3(screenRoot.Value.X, screenRoot.Value.Y, 0);
+
+                // [PROJECT HEAD/WEAKSPOT]
+                Vector3? headScreen = null;
+                if (ent.WorldHead.HasValue)
+                {
+                    var w2sHead = _w2s.Project(ent.WorldHead.Value, cam.Value);
+                    if (w2sHead.HasValue) headScreen = new Vector3(w2sHead.Value.X, w2sHead.Value.Y, 0);
+                }
+
+                // [DRAW SKELETON]
+                if (_drawSkeleton && ent.BoneWorldPos.Count > 0)
+                {
+                    foreach (var kvp in ent.BoneWorldPos)
+                    {
+                        var boneWorld = kvp.Value;
+                        var boneScreen = _w2s.Project(boneWorld, cam.Value);
+
+                        if (boneScreen.HasValue)
+                        {
+                            var pos = boneScreen.Value;
+                            if (pos.X > -100 && pos.X < SCREEN_WIDTH + 100 && pos.Y > -100 && pos.Y < SCREEN_HEIGHT + 100)
+                            {
+                                g.FillRectangle(_boneBrush, (float)pos.X - 1, (float)pos.Y - 1, 3, 3);
+                                if (_boneDisplayMode == 1) g.DrawString(kvp.Key.ToString(), _itemFont, Brushes.White, (float)pos.X, (float)pos.Y - 10);
+                                else if (_boneDisplayMode == 2 && ent.BoneNames.ContainsKey(kvp.Key)) g.DrawString(ent.BoneNames[kvp.Key], _itemFont, Brushes.LightGreen, (float)pos.X, (float)pos.Y - 10);
+                            }
+                        }
+                    }
+                }
+
+                // [DRAW WEAKSPOT]
+                if (_drawWeakspot && headScreen.HasValue)
+                {
+                    var hPos = headScreen.Value;
+                    g.DrawEllipse(_enemyPen, (float)hPos.X - 4, (float)hPos.Y - 4, 8, 8);
+                    g.FillRectangle(Brushes.Red, (float)hPos.X - 2, (float)hPos.Y - 2, 4, 4);
+                    g.DrawString(ent.LockReason, _itemFont, ent.LockColor, (float)hPos.X + 6, (float)hPos.Y - 6);
+                }
+
+                // [DRAW BOX]
                 float height = Math.Clamp(1800.0f / ent.Distance, 10.0f, 400.0f); float width = height * 0.6f; float boxX = 0, boxY = 0; bool validBox = false;
-                if (ent.HeadPos.HasValue) { boxX = (float)ent.HeadPos.Value.X - (width / 2); boxY = (float)ent.HeadPos.Value.Y - (height * 0.15f); validBox = true; } else if (ent.RootPos.HasValue) { boxX = (float)ent.RootPos.Value.X - (width / 2); boxY = (float)ent.RootPos.Value.Y - height; validBox = true; }
+                if (headScreen.HasValue) { boxX = (float)headScreen.Value.X - (width / 2); boxY = (float)headScreen.Value.Y - (height * 0.15f); validBox = true; }
+                else { boxX = (float)rootScreen.X - (width / 2); boxY = (float)rootScreen.Y - height; validBox = true; }
+
                 if (!validBox) continue; if (boxX < -width || boxX > SCREEN_WIDTH || boxY < -height || boxY > SCREEN_HEIGHT) continue;
                 var distColor = ent.Distance < 30 ? _enemyPen : _enemyPenFar;
                 if (_drawBox) g.DrawRectangle(distColor, boxX, boxY, width, height);
-                if (_drawLines) { float targetX = ent.HeadPos.HasValue ? (float)ent.HeadPos.Value.X : (boxX + width / 2); float targetY = ent.HeadPos.HasValue ? (float)ent.HeadPos.Value.Y : (boxY + height / 2); g.DrawLine(_linePen, centerX, SCREEN_HEIGHT, targetX, targetY); }
-                if (_drawDist) { float estimatedWidth = ent.LabelText.Length * 6.0f; float textX = boxX + (width - estimatedWidth) / 2; float textY = boxY - 15; g.DrawString(ent.LabelText, _itemFont, Brushes.Salmon, textX, textY); } // Updated to use LabelText
-                if (ent.HasWeakspot && ent.HeadPos.HasValue && ent.WeakspotPos.HasValue)
-                {
-                    // 1. Calculate Screen Distance (Is he in the circle?)
-                    float dx = (float)ent.HeadPos.Value.X - centerX;
-                    float dy = (float)ent.HeadPos.Value.Y - centerY;
-                    float screenDist = (float)Math.Sqrt(dx * dx + dy * dy);
 
-                    // 2. Check FOV
-                    if (screenDist < AIM_FOV_RADIUS)
+                if (_drawLines) { float targetX = headScreen.HasValue ? (float)headScreen.Value.X : (boxX + width / 2); float targetY = headScreen.HasValue ? (float)headScreen.Value.Y : (boxY + height / 2); g.DrawLine(_linePen, centerX, SCREEN_HEIGHT, targetX, targetY); }
+                if (_drawDist) { float estimatedWidth = ent.LabelText.Length * 6.0f; float textX = boxX + (width - estimatedWidth) / 2; float textY = boxY - 15; g.DrawString(ent.LabelText, _itemFont, Brushes.Salmon, textX, textY); }
+
+                // [AIMBOT LOGIC]
+                if (ent.HasWeakspot && ent.WorldWeakspot.HasValue)
+                {
+                    // Use FRESH screen position for aimbot
+                    var aimScreen = _w2s.Project(ent.WorldWeakspot.Value, cam.Value);
+
+                    if (aimScreen.HasValue)
                     {
-                        // 3. Selection Rule: Pick the one CLOSEST TO ME (World Distance)
-                        // This prevents locking onto far enemies when a close one is available.
-                        if (ent.Distance < closestWorldDist)
+                        float dx = (float)aimScreen.Value.X - centerX;
+                        float dy = (float)aimScreen.Value.Y - centerY;
+                        float screenDist = (float)Math.Sqrt(dx * dx + dy * dy);
+
+                        if (screenDist < AIM_FOV_RADIUS)
                         {
-                            closestWorldDist = ent.Distance;
-                            bestTargetPos = ent.WeakspotPos;
+                            if (ent.Distance < closestWorldDist)
+                            {
+                                closestWorldDist = ent.Distance;
+                                bestTargetPos = ent.WorldWeakspot; // Keep as World Pos
+                            }
                         }
                     }
                 }
             }
 
-            // Draw Items
             if (_drawItems)
             {
                 foreach (var item in items)
                 {
-                    if (item.ScreenPos.X > 0 && item.ScreenPos.X < SCREEN_WIDTH && item.ScreenPos.Y > 0 && item.ScreenPos.Y < SCREEN_HEIGHT)
+                    var iScreen = _w2s.Project(item.WorldPos, cam.Value);
+                    if (iScreen.HasValue)
                     {
-                        g.DrawString(item.Text, _itemFont, item.Color, (float)item.ScreenPos.X, (float)item.ScreenPos.Y);
+                        if (iScreen.Value.X > 0 && iScreen.Value.X < SCREEN_WIDTH && iScreen.Value.Y > 0 && iScreen.Value.Y < SCREEN_HEIGHT)
+                        {
+                            g.DrawString(item.Text, _itemFont, item.Color, (float)iScreen.Value.X, (float)iScreen.Value.Y);
+                        }
                     }
                 }
             }
 
             if (bestTargetPos.HasValue && (GetAsyncKeyState(0x02) & 0x8000) != 0)
             {
-                var screenTarget = _w2s.Project(bestTargetPos.Value, cam);
+                var screenTarget = _w2s.Project(bestTargetPos.Value, cam.Value);
                 if (screenTarget.HasValue)
                 {
                     float deltaX = (float)screenTarget.Value.X - centerX;
                     float deltaY = (float)screenTarget.Value.Y - centerY;
 
-                    // [FIX 1] Deadzone (Stop shaking if we are close enough)
-                    // If we are within 2 pixels, just stop aiming.
-                    if (Math.Abs(deltaX) < 2 && Math.Abs(deltaY) < 2)
+                    if (Math.Abs(deltaX) >= 2 || Math.Abs(deltaY) >= 2)
                     {
-                        // Do nothing (just wait)
-                    }
-                    else
-                    {
-                        // Run the smoothing and mouse_event logic here
-                        float smooth = 4.5f;
-
+                        float smooth = 4.0f;
                         int moveX = (int)(deltaX / smooth);
                         int moveY = (int)(deltaY / smooth);
 
-                        // Optional: Minimum move check to prevent "stuck" feeling
-                        // If we need to move but the smoothing makes it 0, force it to 1.
                         if (moveX == 0 && Math.Abs(deltaX) > 2) moveX = deltaX > 0 ? 1 : -1;
                         if (moveY == 0 && Math.Abs(deltaY) > 2) moveY = deltaY > 0 ? 1 : -1;
 
                         mouse_event(MOUSEEVENTF_MOVE, moveX, moveY, 0, 0);
                     }
                 }
-                UpdateFPS();
             }
+            UpdateFPS();
         }
         catch { }
     }
@@ -411,7 +485,7 @@ public class OverlayForm : Form
     private void AttachTick(object? sender, EventArgs e) { if (!_memory.IsAttached) TryAttach(); }
     private void DrawInfoPanel(Graphics g, CameraData cam, string debug, bool attached, bool enabled)
     {
-        int menuX = 20; int menuY = 20; int width = 220; int height = 260; int headerHeight = 25; // Increased height
+        int menuX = 20; int menuY = 20; int width = 220; int height = 260; int headerHeight = 25;
         g.FillRectangle(_menuBgBrush, menuX, menuY, width, height); g.DrawRectangle(_borderPen, menuX, menuY, width, height);
         g.FillRectangle(_headerBrush, menuX, menuY, width, headerHeight); g.DrawRectangle(_borderPen, menuX, menuY, width, headerHeight);
         g.DrawString("REMNANT 2 EXTERNAL", _titleFont, _textBrush, menuX + 5, menuY + 4);
@@ -419,7 +493,7 @@ public class OverlayForm : Form
         int itemY = menuY + headerHeight + 10; int gap = 20;
         void DrawToggle(string label, string key, bool isActive) { g.DrawString(key, _itemFont, _offBrush, menuX + 10, itemY); g.DrawString(label, _itemFont, _textBrush, menuX + 45, itemY); string state = isActive ? "ON" : "OFF"; Brush stateBrush = isActive ? _onBrush : _offBrush; g.DrawString(state, _itemFont, stateBrush, menuX + width - 40, itemY); itemY += gap; }
         DrawToggle("ESP Master", "[F5]", enabled); DrawToggle("Snaplines", "[F6]", _drawLines); DrawToggle("Weakspots", "[F7]", _drawWeakspot); DrawToggle("2D Box", "[F8]", _drawBox); DrawToggle("Distance", "[F9]", _drawDist); DrawToggle("Skeleton", "[F10]", _drawSkeleton);
-        DrawToggle("Item ESP", "[INS]", _drawItems); // New
+        DrawToggle("Item ESP", "[INS]", _drawItems);
         string debugModeStr = _boneDisplayMode == 0 ? "OFF" : (_boneDisplayMode == 1 ? "NUM" : "NAME"); g.DrawString("[F11]", _itemFont, _offBrush, menuX + 10, itemY); g.DrawString("Debug Bones", _itemFont, _textBrush, menuX + 45, itemY); g.DrawString(debugModeStr, _itemFont, _boneDisplayMode > 0 ? _onBrush : _offBrush, menuX + width - 40, itemY); itemY += gap;
         g.DrawString("[F12] Dump Entities (Output)", _itemFont, _offBrush, menuX + 10, itemY);
         g.DrawLine(_borderPen, menuX, itemY + 25, menuX + width, itemY + 25); itemY += 30;
