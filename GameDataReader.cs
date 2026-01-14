@@ -173,7 +173,7 @@ public class GameDataReader
                         name.Contains("Mesh") || name.Contains("Rock") || name.Contains("Zig") ||
                         name.Contains("Floor") || name.Contains("AI") || name.Contains("Vase") ||
                         name.Contains("Pot") || name.Contains("Pan") || name.Contains("VFX") ||
-                        name.Contains("Sound") || name.Contains("Light") || name.Contains("Decal") || name.Contains("Volume") ||
+                        name.Contains("Sound") || name.Contains("") || name.Contains("Decal") || name.Contains("Volume") ||
                         name.Contains("Trigger") || name.Contains("Tile") || name.Contains("Camera") ||
                         name.Contains("LevelInstance") || name.Contains("Stand") || name.Contains("Vista")) { isItem = false; }
 
@@ -369,7 +369,30 @@ public class GameDataReader
         _boneNameCache[meshAsset] = nameMap; _boneIndexToNameCache[meshAsset] = indexMap; return parents;
     }
 
-    public int GetBoneIndexByName(IntPtr meshAddress, string targetBoneName) { IntPtr meshAsset = _memory.ReadPointer(IntPtr.Add(meshAddress, 0x5B0)); if (meshAsset == IntPtr.Zero) return -1; if (_boneNameCache.TryGetValue(meshAsset, out var nameMap)) { if (nameMap.TryGetValue(targetBoneName, out int index)) return index; } return -1; }
+    public int GetBoneIndexByName(IntPtr meshAddress, string targetBoneName)
+    {
+        // Read the Mesh Asset (Skeleton Data)
+        IntPtr meshAsset = _memory.ReadPointer(IntPtr.Add(meshAddress, 0x5B0));
+        if (meshAsset == IntPtr.Zero) return -1;
+
+        if (_boneNameCache.TryGetValue(meshAsset, out var nameMap))
+        {
+            // 1. Try Exact Match first (It's faster)
+            if (nameMap.TryGetValue(targetBoneName, out int index)) return index;
+
+            // 2. Try Partial Match (The Fix)
+            // This iterates through all bones and checks if they CONTAIN your text.
+            // It ignores case (Upper/Lower) to make it easier for you.
+            foreach (var kvp in nameMap)
+            {
+                if (kvp.Key.Contains(targetBoneName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return kvp.Value;
+                }
+            }
+        }
+        return -1;
+    }
     public string GetBoneName(IntPtr meshAddress, int index) { IntPtr meshAsset = _memory.ReadPointer(IntPtr.Add(meshAddress, 0x5B0)); if (meshAsset == IntPtr.Zero) return ""; if (_boneIndexToNameCache.TryGetValue(meshAsset, out var indexMap)) { if (indexMap.TryGetValue(index, out string name)) return name; } return ""; }
     public string GetDebugInfo() => _gNamesFound ? "GNames: OK" : "Scanning...";
     public void LogAllEntities() { }

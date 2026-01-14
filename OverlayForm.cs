@@ -28,10 +28,8 @@ public class OverlayForm : Form
     private readonly Dictionary<string, string> _customBoneOverrides = new()
     {
         { "Root_Flyer", "weakpoint_01_L" },
-        { "Char_Nemesis", "Bone_RN_Coll" },
-        { "RootZombie_C", "LoinStrap_01" },
-        { "Zombie", "LoinStrap_01" },
-        { "Char_RootZombie_", "Hand_L" }
+        { "Char_RootZombie_C", "Bone_SZ_Hand_L" },
+        { "Char_Nemesis", "Bone_RN_Coll"}
     };
 
     // [Core Components]
