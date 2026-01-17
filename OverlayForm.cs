@@ -69,22 +69,28 @@ public class OverlayForm : Form
     // [Resources]
     private readonly Pen _enemyPen; private readonly Pen _enemyPenFar; private readonly Pen _bonePen; private readonly Pen _linePen; private readonly Pen _fovPen;
     private readonly Brush _menuBgBrush; private readonly Brush _headerBrush; private readonly Pen _borderPen; private readonly Brush _textBrush; private readonly Brush _onBrush; private readonly Brush _offBrush; private readonly Brush _boneBrush;
-    private PrivateFontCollection _pfc = new PrivateFontCollection(); private readonly Font _titleFont; private readonly Font _itemFont;
+    private PrivateFontCollection _pfc = new PrivateFontCollection();
 
-    // [Render Entities - NOW STORING WORLD POSITIONS]
+    // [FONTS]
+    private readonly Font _titleFont;
+    private readonly Font _itemFont; // For Menu
+    private readonly Font _espFont;  // [NEW] For ESP Labels (Smaller)
+
+    // [Render Entities]
     public class RenderEntity
     {
-        // We store WORLD coordinates here, not Screen coordinates.
         public Vector3 WorldRoot;
         public Vector3? WorldWeakspot;
         public Vector3? WorldHead;
 
-        public float Distance; // Cached distance for sorting
+        public IntPtr MeshAddress;
+        public int WeakspotIndex;
+
+        public float Distance;
         public string LabelText = "";
         public bool IsVisible = false;
         public bool HasWeakspot = false;
 
-        // Store Bones as WORLD positions
         public Dictionary<int, Vector3> BoneWorldPos = new();
         public Dictionary<int, string> BoneNames = new();
         public string LockReason = "";
@@ -93,7 +99,7 @@ public class OverlayForm : Form
 
     public class RenderItem
     {
-        public Vector3 WorldPos; // Store World Pos
+        public Vector3 WorldPos;
         public string Text;
         public Brush Color;
         public float Distance;
@@ -111,7 +117,28 @@ public class OverlayForm : Form
         _enemyPen = new Pen(Color.Red, 2); _enemyPenFar = new Pen(Color.Orange, 2); _bonePen = new Pen(Color.Cyan, 1.5f); _linePen = new Pen(Color.FromArgb(150, Color.Yellow), 1); _fovPen = new Pen(Color.FromArgb(50, 255, 255, 255), 1);
         _menuBgBrush = new SolidBrush(Color.FromArgb(220, 35, 35, 35)); _headerBrush = new SolidBrush(Color.FromArgb(255, 58, 0, 90)); _borderPen = new Pen(Color.Black, 1); _textBrush = new SolidBrush(Color.FromArgb(230, 230, 230)); _onBrush = new SolidBrush(Color.FromArgb(0, 255, 100)); _offBrush = new SolidBrush(Color.FromArgb(150, 150, 150)); _boneBrush = new SolidBrush(Color.Cyan);
 
-        try { if (File.Exists("font.ttf")) { _pfc.AddFontFile("font.ttf"); _titleFont = new Font(_pfc.Families[0], 12, FontStyle.Bold); _itemFont = new Font(_pfc.Families[0], 10, FontStyle.Regular); } else { _titleFont = new Font("Segoe UI", 10, FontStyle.Bold); _itemFont = new Font("Segoe UI", 9, FontStyle.Regular); } } catch { _titleFont = new Font("Segoe UI", 10, FontStyle.Bold); _itemFont = new Font("Segoe UI", 9, FontStyle.Regular); }
+        try
+        {
+            if (File.Exists("font.ttf"))
+            {
+                _pfc.AddFontFile("font.ttf");
+                _titleFont = new Font(_pfc.Families[0], 12, FontStyle.Bold);
+                _itemFont = new Font(_pfc.Families[0], 10, FontStyle.Regular);
+            }
+            else
+            {
+                _titleFont = new Font("Segoe UI", 10, FontStyle.Bold);
+                _itemFont = new Font("Segoe UI", 9, FontStyle.Regular);
+            }
+        }
+        catch
+        {
+            _titleFont = new Font("Segoe UI", 10, FontStyle.Bold);
+            _itemFont = new Font("Segoe UI", 9, FontStyle.Regular);
+        }
+
+        // [NEW] Define the smaller ESP font here (Size 8)
+        _espFont = new Font("Segoe UI", 8, FontStyle.Regular);
 
         InitializeOverlay();
         _logicThread = new Thread(LogicLoop) { IsBackground = true, Priority = ThreadPriority.Normal }; _logicThread.Start();
@@ -141,7 +168,6 @@ public class OverlayForm : Form
                 try
                 {
                     var info = _gameReader.GetDebugInfo();
-                    // We grab camera here for Distance calc, but we will grab it AGAIN in OnPaint for drawing
                     var camera = _gameReader.GetCameraData();
 
                     if (camera.HasValue && camera.Value.IsValid)
@@ -152,14 +178,15 @@ public class OverlayForm : Form
                         foreach (var character in rawCharacters)
                         {
                             if (character.IsPlayer) continue;
-                            if (character.Distance > 150) continue; // Optimization: Don't process far entities
+                            if (character.Distance > 150) continue;
 
                             var renderEnt = new RenderEntity();
                             renderEnt.Distance = (float)character.Distance;
                             renderEnt.LabelText = $"[{character.DisplayName}] {character.Distance:F0}m";
 
-                            // [CHANGE] Store WORLD Position, do not Project yet!
                             renderEnt.WorldRoot = character.Location;
+                            renderEnt.MeshAddress = character.MeshAddress;
+                            renderEnt.WeakspotIndex = character.WeakspotIndex;
 
                             if (character.Bones != null && character.Bones.Count > 0)
                             {
@@ -179,7 +206,6 @@ public class OverlayForm : Form
                                 double waistHeight = minZ + ((maxZ - minZ) * 0.5);
                                 Vector3? weakspot3D = null;
 
-                                // Custom Overrides
                                 foreach (var overrideEntry in _customBoneOverrides)
                                 {
                                     if (character.Name.Contains(overrideEntry.Key, StringComparison.OrdinalIgnoreCase))
@@ -195,14 +221,12 @@ public class OverlayForm : Form
                                     }
                                 }
 
-                                // Priority A
                                 if (weakspot3D == null && character.WeakspotIndex != -1 && character.Bones.ContainsKey(character.WeakspotIndex))
                                 {
                                     weakspot3D = character.Bones[character.WeakspotIndex];
                                     renderEnt.LockReason = isVis ? "CRITICAL" : "CRITICAL (HID)";
                                 }
 
-                                // Priority B
                                 if (weakspot3D == null)
                                 {
                                     foreach (var kvp in character.Bones)
@@ -221,7 +245,6 @@ public class OverlayForm : Form
                                     }
                                 }
 
-                                // Priority C
                                 if (weakspot3D == null)
                                 {
                                     Vector3? bestNameMatch = null;
@@ -232,7 +255,6 @@ public class OverlayForm : Form
                                         int bIndex = kvp.Key;
                                         var bPos = kvp.Value;
 
-                                        // [CHANGE] Store Bone World Pos for later projection
                                         if (_drawSkeleton)
                                         {
                                             renderEnt.BoneWorldPos[bIndex] = bPos;
@@ -263,7 +285,6 @@ public class OverlayForm : Form
                                     }
                                 }
 
-                                // Priority D
                                 if (weakspot3D == null)
                                 {
                                     foreach (var bPos in character.Bones.Values)
@@ -284,7 +305,6 @@ public class OverlayForm : Form
                                 if (weakspot3D.HasValue)
                                 {
                                     renderEnt.HasWeakspot = true;
-                                    // We only store the WORLD position now. Projection happens in OnPaint.
                                     renderEnt.WorldHead = weakspot3D.Value;
                                 }
                             }
@@ -331,7 +351,6 @@ public class OverlayForm : Form
         CheckToggle((int)Keys.End, () => { _isRunning = false; Application.Exit(); });
     }
 
-    // Paste this into OverlayForm.cs, replacing the old "OnPaint" function completely.
     protected override void OnPaint(PaintEventArgs e)
     {
         if (!_isRunning) return;
@@ -339,18 +358,15 @@ public class OverlayForm : Form
         {
             var g = e.Graphics;
 
-            // [OPTIMIZATION SETTINGS]
-            // These settings reduce quality slightly to gain massive FPS
             g.CompositingMode = CompositingMode.SourceOver;
             g.CompositingQuality = CompositingQuality.HighSpeed;
             g.InterpolationMode = InterpolationMode.NearestNeighbor;
             g.SmoothingMode = SmoothingMode.None;
             g.PixelOffsetMode = PixelOffsetMode.HighSpeed;
-            g.TextRenderingHint = TextRenderingHint.SingleBitPerPixelGridFit; // Fast text
+            g.TextRenderingHint = TextRenderingHint.SingleBitPerPixelGridFit;
 
             g.Clear(Color.Black);
 
-            // [KEY CHANGE] Get FRESH Camera Data right now for drawing
             CameraData? cam = _gameReader.GetCameraData();
             if (!cam.HasValue) return;
 
@@ -363,25 +379,17 @@ public class OverlayForm : Form
             float centerX = SCREEN_WIDTH / 2.0f; float centerY = SCREEN_HEIGHT / 2.0f;
             g.DrawEllipse(_fovPen, centerX - AIM_FOV_RADIUS, centerY - AIM_FOV_RADIUS, AIM_FOV_RADIUS * 2, AIM_FOV_RADIUS * 2);
 
-            Vector3? bestTargetPos = null;
-            float closestWorldDist = 99999f;
-
             foreach (var ent in entities)
             {
-                // 1. [OPTIMIZATION] Simple bounds check before math
-                // If the entity is way behind us or too far, skip it early
                 if (ent.Distance > 250) continue;
 
-                // [PROJECT ENTITY ROOT]
                 var screenRoot = _w2s.Project(ent.WorldRoot, cam.Value);
                 if (!screenRoot.HasValue) continue;
 
-                // 2. [OPTIMIZATION] Skip drawing if off-screen
                 if (screenRoot.Value.X < -200 || screenRoot.Value.X > SCREEN_WIDTH + 200) continue;
 
                 Vector3 rootScreen = new Vector3(screenRoot.Value.X, screenRoot.Value.Y, 0);
 
-                // [PROJECT HEAD/WEAKSPOT]
                 Vector3? headScreen = null;
                 if (ent.WorldHead.HasValue)
                 {
@@ -389,7 +397,6 @@ public class OverlayForm : Form
                     if (w2sHead.HasValue) headScreen = new Vector3(w2sHead.Value.X, w2sHead.Value.Y, 0);
                 }
 
-                // [DRAW SKELETON] - Optimized: Only draw if close (< 40m)
                 if (_drawSkeleton && ent.BoneWorldPos.Count > 0 && ent.Distance < 40)
                 {
                     foreach (var kvp in ent.BoneWorldPos)
@@ -403,24 +410,20 @@ public class OverlayForm : Form
                             if (pos.X > -100 && pos.X < SCREEN_WIDTH + 100 && pos.Y > -100 && pos.Y < SCREEN_HEIGHT + 100)
                             {
                                 g.FillRectangle(_boneBrush, (float)pos.X - 1, (float)pos.Y - 1, 3, 3);
-                                // Only draw text if explicitly asked, otherwise it kills FPS
-                                if (_boneDisplayMode == 1) g.DrawString(kvp.Key.ToString(), _itemFont, Brushes.White, (float)pos.X, (float)pos.Y - 10);
-                                else if (_boneDisplayMode == 2 && ent.BoneNames.ContainsKey(kvp.Key)) g.DrawString(ent.BoneNames[kvp.Key], _itemFont, Brushes.LightGreen, (float)pos.X, (float)pos.Y - 10);
+                                if (_boneDisplayMode == 1) g.DrawString(kvp.Key.ToString(), _espFont, Brushes.White, (float)pos.X, (float)pos.Y - 10);
+                                else if (_boneDisplayMode == 2 && ent.BoneNames.ContainsKey(kvp.Key)) g.DrawString(ent.BoneNames[kvp.Key], _espFont, Brushes.LightGreen, (float)pos.X, (float)pos.Y - 10);
                             }
                         }
                     }
                 }
 
-                // [DRAW WEAKSPOT]
                 if (_drawWeakspot && headScreen.HasValue)
                 {
                     var hPos = headScreen.Value;
                     g.DrawEllipse(_enemyPen, (float)hPos.X - 4, (float)hPos.Y - 4, 8, 8);
                     g.FillRectangle(Brushes.Red, (float)hPos.X - 2, (float)hPos.Y - 2, 4, 4);
-                    // g.DrawString(ent.LockReason, _itemFont, ent.LockColor, (float)hPos.X + 6, (float)hPos.Y - 6); // Disable text for FPS
                 }
 
-                // [DRAW BOX]
                 float height = Math.Clamp(1800.0f / ent.Distance, 10.0f, 400.0f);
                 float width = height * 0.6f;
                 float boxX = 0, boxY = 0;
@@ -440,30 +443,8 @@ public class OverlayForm : Form
 
                 if (_drawDist)
                 {
-                    // Optimized text placement
-                    g.DrawString(ent.LabelText, _itemFont, Brushes.Salmon, boxX, boxY - 15);
-                }
-
-                // [AIMBOT LOGIC]
-                if (ent.HasWeakspot && ent.WorldWeakspot.HasValue)
-                {
-                    var aimScreen = _w2s.Project(ent.WorldWeakspot.Value, cam.Value);
-
-                    if (aimScreen.HasValue)
-                    {
-                        float dx = (float)aimScreen.Value.X - centerX;
-                        float dy = (float)aimScreen.Value.Y - centerY;
-                        float screenDist = (float)Math.Sqrt(dx * dx + dy * dy);
-
-                        if (screenDist < AIM_FOV_RADIUS)
-                        {
-                            if (ent.Distance < closestWorldDist)
-                            {
-                                closestWorldDist = ent.Distance;
-                                bestTargetPos = ent.WorldWeakspot;
-                            }
-                        }
-                    }
+                    // [CHANGE] Use _espFont instead of _itemFont
+                    g.DrawString(ent.LabelText, _espFont, Brushes.Salmon, boxX, boxY - 15);
                 }
             }
 
@@ -476,15 +457,53 @@ public class OverlayForm : Form
                     {
                         if (iScreen.Value.X > 0 && iScreen.Value.X < SCREEN_WIDTH && iScreen.Value.Y > 0 && iScreen.Value.Y < SCREEN_HEIGHT)
                         {
-                            g.DrawString(item.Text, _itemFont, item.Color, (float)iScreen.Value.X, (float)iScreen.Value.Y);
+                            // [CHANGE] Use _espFont instead of _itemFont
+                            g.DrawString(item.Text, _espFont, item.Color, (float)iScreen.Value.X, (float)iScreen.Value.Y);
                         }
                     }
                 }
             }
 
-            if (bestTargetPos.HasValue && (GetAsyncKeyState(0x02) & 0x8000) != 0)
+            RenderEntity? bestTargetEnt = null;
+            float closestDist = 99999f;
+
+            foreach (var aimEnt in entities)
             {
-                var screenTarget = _w2s.Project(bestTargetPos.Value, cam.Value);
+                if (!aimEnt.HasWeakspot || !aimEnt.WorldWeakspot.HasValue) continue;
+
+                var aimScreen = _w2s.Project(aimEnt.WorldWeakspot.Value, cam.Value);
+                if (!aimScreen.HasValue) continue;
+
+                float dx = (float)aimScreen.Value.X - centerX;
+                float dy = (float)aimScreen.Value.Y - centerY;
+                float screenDist = (float)Math.Sqrt(dx * dx + dy * dy);
+
+                if (screenDist < AIM_FOV_RADIUS)
+                {
+                    if (aimEnt.Distance < closestDist)
+                    {
+                        closestDist = aimEnt.Distance;
+                        bestTargetEnt = aimEnt;
+                    }
+                }
+            }
+
+            if (bestTargetEnt != null && (GetAsyncKeyState(0x02) & 0x8000) != 0)
+            {
+                Vector3 targetPos;
+                if (bestTargetEnt.MeshAddress != IntPtr.Zero && bestTargetEnt.WeakspotIndex != -1)
+                {
+                    Vector3 freshPos = _gameReader.GetBonePosition(bestTargetEnt.MeshAddress, bestTargetEnt.WeakspotIndex);
+                    if (!freshPos.IsZero) targetPos = freshPos;
+                    else targetPos = bestTargetEnt.WorldWeakspot.Value;
+                }
+                else
+                {
+                    targetPos = bestTargetEnt.WorldWeakspot.Value;
+                }
+
+                var screenTarget = _w2s.Project(targetPos, cam.Value);
+
                 if (screenTarget.HasValue)
                 {
                     float deltaX = (float)screenTarget.Value.X - centerX;
@@ -492,7 +511,7 @@ public class OverlayForm : Form
 
                     if (Math.Abs(deltaX) >= 2 || Math.Abs(deltaY) >= 2)
                     {
-                        float smooth = 4.0f;
+                        float smooth = 3.0f;
                         int moveX = (int)(deltaX / smooth);
                         int moveY = (int)(deltaY / smooth);
 
@@ -503,6 +522,7 @@ public class OverlayForm : Form
                     }
                 }
             }
+
             UpdateFPS();
         }
         catch { }

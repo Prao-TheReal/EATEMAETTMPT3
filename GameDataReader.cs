@@ -13,9 +13,8 @@ public class GameDataReader
     private bool _gNamesFound = false;
     private List<CachedEntity> _entityCache = new();
     private DateTime _lastCacheTime = DateTime.MinValue;
-    private const double CACHE_INTERVAL = 1.0; // Rescan every 1 second
+    private const double CACHE_INTERVAL = 1.0;
 
-    // [SAFETY] Minimal lock
     private readonly object _dataLock = new object();
 
     private List<ItemData> _itemCache = new();
@@ -35,10 +34,13 @@ public class GameDataReader
     private class CachedEntity
     {
         public IntPtr Address;
+        public IntPtr Mesh;            // [ADDED]
         public string Name;
         public string DisplayName;
         public bool IsPlayer;
+        public int WeakspotIndex = -1; // [ADDED]
     }
+
     private void ScanAroundGWorld()
     {
         if (_gNamesFound) return; if (_memory.BaseAddress == IntPtr.Zero) return;
@@ -134,7 +136,6 @@ public class GameDataReader
             var world = _memory.ReadPointer(_gWorld);
             if (world == IntPtr.Zero) return null;
 
-            // [FIX] Use constructor instead of Vector3.Zero
             Vector3 myPos = new Vector3(0, 0, 0);
             if (LocalPawn != IntPtr.Zero)
             {
@@ -178,7 +179,7 @@ public class GameDataReader
                                   name.Contains("Material") || name.Contains("Interactive_") || name.Contains("Item_") || name.Contains("Weapon_");
 
                     if (name.Contains("Default__") || name.Contains("Context") || name.Contains("3D") ||
-                        name.Contains("Tree") || name.Contains("Leaves") || name.Contains("Hall") || name.Contains("Pillar") || name.Contains("Dynamic") ||
+                        name.Contains("Tree") || name.Contains("Leaves") || name.Contains("Light") || name.Contains("Pillar") || name.Contains("Breakable") || name.Contains("Physics") || name.Contains("Dynamic") ||
                         name.Contains("Spawn") || name.Contains("Char") || name.Contains("FX") ||
                         name.Contains("Mesh") || name.Contains("Rock") || name.Contains("Zig") ||
                         name.Contains("Floor") || name.Contains("AI") || name.Contains("Buildi") || name.Contains("Stool") || name.Contains("Vase") ||
@@ -202,14 +203,13 @@ public class GameDataReader
                     double distCalc = location.Distance(camera.Location) / 100.0;
                     if (distCalc > 150) continue;
 
-                    // [FIX] Personal Bubble Check (Using IsZero property on instance)
                     if (!myPos.IsZero && location.Distance(myPos) < 1.5) continue;
 
                     Color color = Color.White;
                     if (name.Contains("Relic") || name.Contains("Gem") || name.Contains("Material")) color = Color.Orange;
-                    else if (name.Contains("Ring") || name.Contains("Amulet")) color = Color.Purple;
+                    else if (name.Contains("Ring_") || name.Contains("Amulet")) color = Color.Purple;
                     else if (name.Contains("Simulacrum")) color = Color.Red;
-                    else if (name.Contains("Lumenite")) color = Color.LightPink;
+                    else if (name.Contains("Lumenite") || name.Contains("Loo")) color = Color.LightPink;
                     else if (name.Contains("Scrap")) color = Color.Gray;
                     else if (name.Contains("Iron")) color = Color.LightGreen;
                     else if (name.Contains("Ammo")) color = Color.Yellow;
@@ -236,48 +236,41 @@ public class GameDataReader
         return clean;
     }
 
-    // --- [OPTIMIZED BROAD PHASE] ---
     public List<CharacterData> GetAllCharacters(CameraData camera)
     {
         var outputList = new List<CharacterData>();
 
-        // [PHASE 1: SLOW SCAN] (Runs once per second)
-        // Finds NEW enemies using the "Original Strict Logic"
         if ((DateTime.Now - _lastCacheTime).TotalSeconds > CACHE_INTERVAL)
         {
             _lastCacheTime = DateTime.Now;
             RefreshCache(camera);
         }
 
-        // [PHASE 2: FAST UPDATE] (Runs every frame)
-        // Updates positions of KNOWN enemies
         for (int i = _entityCache.Count - 1; i >= 0; i--)
         {
             var cached = _entityCache[i];
 
-            // 1. STRICT HEALTH CHECK (Original Logic)
-            // Check health every frame so dead enemies disappear instantly
+            // [RESTORED STRICT CHECKS FROM YOUR FILE]
+
+            // 1. Health Check
             float health = _memory.ReadFloat(cached.Address + Offsets.HealthNormalized);
             if (health <= 0.001f)
             {
-                _entityCache.RemoveAt(i); // Remove dead entity
+                _entityCache.RemoveAt(i);
                 continue;
             }
 
-            // 2. STRICT MOVEMENT CHECK (Original Logic)
-            // We only read from CharacterMovement. No RootComponent fallback.
+            // 2. CharacterMovement Check (Kills static meshes)
             IntPtr moveComp = _memory.ReadPointer(cached.Address + Offsets.CharacterMovement);
             if (moveComp == IntPtr.Zero)
             {
-                _entityCache.RemoveAt(i); // Invalid entity
+                _entityCache.RemoveAt(i);
                 continue;
             }
 
-            // 3. FAST POSITION READ
-            // Reads X, Y, Z in one go (Optimization)
+            // 3. Fast Position Read
             Vector3 location = new Vector3(0, 0, 0);
             byte[] posBuffer = _memory.ReadBytes(moveComp + Offsets.LocationX, 24);
-
             if (posBuffer != null)
             {
                 double x = BitConverter.ToDouble(posBuffer, 0);
@@ -291,7 +284,12 @@ public class GameDataReader
             double dist = location.Distance(camera.Location) / 100.0;
             if (dist > 150) continue;
 
-            // 4. Build Output
+            // [ADDED] Lazy Load Weakspot
+            if (!cached.IsPlayer && cached.WeakspotIndex == -1)
+            {
+                cached.WeakspotIndex = GetWeakspotBoneIndex(cached.Address, cached.Mesh);
+            }
+
             var charData = new CharacterData
             {
                 Address = cached.Address,
@@ -299,10 +297,13 @@ public class GameDataReader
                 DisplayName = cached.DisplayName,
                 IsPlayer = cached.IsPlayer,
                 Location = location,
-                Distance = dist
+                Distance = dist,
+                WeakspotIndex = cached.WeakspotIndex,
+                MeshAddress = cached.Mesh, // [ADDED]
+                Bones = new Dictionary<int, Vector3>()
             };
 
-            // 5. Skeleton Logic
+            // [KEPT] Your skeleton logic
             if (!charData.IsPlayer && dist < 80)
             {
                 charData.Bones = GetSkeleton(charData.Address);
@@ -311,20 +312,12 @@ public class GameDataReader
                     IntPtr mesh = _memory.ReadPointer(charData.Address + Offsets.Mesh);
                     charData.WeakspotIndex = GetWeakspotBoneIndex(charData.Address, mesh);
                 }
-                outputList.Add(charData);
             }
-            else
-            {
-                outputList.Add(charData);
-            }
+            outputList.Add(charData);
         }
-
         return outputList;
     }
 
-    // ---------------------------------------------------------
-    // ADD THIS HELPER FUNCTION INSIDE THE CLASS
-    // ---------------------------------------------------------
     private void RefreshCache(CameraData camera)
     {
         var newCache = new List<CachedEntity>();
@@ -349,17 +342,13 @@ public class GameDataReader
                 IntPtr charAddr = _memory.ReadPointer(actorsArray + (i * 8));
                 if (charAddr == IntPtr.Zero) continue;
 
-                // [STRICT ORIGINAL LOGIC RESTORED]
-
-                // 1. Check Health
+                // [RESTORED] Strict checks here too
                 float health = _memory.ReadFloat(charAddr + Offsets.HealthNormalized);
                 if (health <= 0.001f) continue;
 
-                // 2. Check CharacterMovement (Must exist)
                 IntPtr moveComp = _memory.ReadPointer(charAddr + Offsets.CharacterMovement);
                 if (moveComp == IntPtr.Zero) continue;
 
-                // 3. Name Check (Heavy)
                 int id = _memory.ReadInt32(charAddr + Offsets.ActorID);
                 if (id == 0) continue;
 
@@ -367,29 +356,33 @@ public class GameDataReader
                 lock (_dataLock) { name = _nameReader.GetName(id); }
                 if (string.IsNullOrEmpty(name)) continue;
 
-                // [FILTERS]
+                // [YOUR EXACT FILTERS]
                 if (name.Contains("Critter") || name.Contains("Deer") ||
                     name.Contains("Camera") || name.Contains("Drone") || name.Contains("summon") ||
                     name.Contains("Volume") || name.Contains("Brush") || name.Contains("Light") ||
-                    //name.Contains("Default__") || name.Contains("Bird") || name.Contains("Context) ||
                     name.Contains("Dep") || name.Contains("Crow") || name.Contains("jagoff") ||
                     name.Contains("Corpse")) continue;
 
-                // Allow "BP_" or valid enemies only
                 if (!name.Contains("BP_") &&
                 !name.Contains("Character") &&
                 !name.Contains("Char_") &&
                 !name.Contains("Enemy") &&
                 !name.Contains("Monster") &&
                 !name.Contains("Boss") &&
-                !name.Contains("Dran") &&   // Specific to Losomn
-                !name.Contains("Root") &&   // Specific to Root Earth/Yaesha
-                !name.Contains("Fae"))      // Specific to Losomn
+                !name.Contains("Dran") &&
+                !name.Contains("Root") &&
+                !name.Contains("Fae"))
                     continue;
+
+                IntPtr rootComp = _memory.ReadPointer(charAddr + Offsets.RootComponent);
+                if (rootComp == IntPtr.Zero) continue;
+
+                IntPtr mesh = _memory.ReadPointer(charAddr + Offsets.Mesh); // [ADDED]
 
                 var cached = new CachedEntity
                 {
                     Address = charAddr,
+                    Mesh = mesh, // [ADDED]
                     Name = name,
                     DisplayName = CleanName(name),
                     IsPlayer = (charAddr == LocalPlayerAddress)
@@ -410,7 +403,6 @@ public class GameDataReader
             var mesh = _memory.ReadPointer(IntPtr.Add(characterAddress, Offsets.Mesh));
             if (mesh == IntPtr.Zero) return bones;
 
-            // [FIX] OFFSET FALLBACK
             IntPtr skeletalMesh = _memory.ReadPointer(IntPtr.Add(mesh, 0x5B0));
             if (skeletalMesh == IntPtr.Zero) skeletalMesh = _memory.ReadPointer(IntPtr.Add(mesh, 0x5A0));
             if (skeletalMesh == IntPtr.Zero) skeletalMesh = _memory.ReadPointer(IntPtr.Add(mesh, 0x5C0));
@@ -425,7 +417,6 @@ public class GameDataReader
             FTransform componentToWorld = new FTransform(rot, trans, scale); Matrix4x4 c2wMatrix = componentToWorld.ToMatrixWithScale();
             var boneArray = _memory.ReadPointer(IntPtr.Add(mesh, Offsets.BoneArray)); var boneCount = _memory.ReadInt32(IntPtr.Add(mesh, Offsets.BoneCount)); if (boneArray == IntPtr.Zero || boneCount <= 0) return bones;
 
-            // [FIX] INCREASED BONE LIMIT (Kept from prev step)
             int limit = Math.Min(boneCount, 200);
             int stride = 0x50; byte[] boneBuffer = _memory.ReadBytes(boneArray, limit * stride); if (boneBuffer == null) return bones;
             for (int i = 0; i < limit; i++) { int offset = i * stride; double x = BitConverter.ToDouble(boneBuffer, offset + 0x20); double y = BitConverter.ToDouble(boneBuffer, offset + 0x28); double z = BitConverter.ToDouble(boneBuffer, offset + 0x30); bones[i] = MultiplyMat(new Vector3(x, y, z), c2wMatrix); }
@@ -464,24 +455,15 @@ public class GameDataReader
 
     public int GetBoneIndexByName(IntPtr meshAddress, string targetBoneName)
     {
-        // Read the Mesh Asset (Skeleton Data)
         IntPtr meshAsset = _memory.ReadPointer(IntPtr.Add(meshAddress, 0x5B0));
         if (meshAsset == IntPtr.Zero) return -1;
 
         if (_boneNameCache.TryGetValue(meshAsset, out var nameMap))
         {
-            // 1. Try Exact Match first (It's faster)
             if (nameMap.TryGetValue(targetBoneName, out int index)) return index;
-
-            // 2. Try Partial Match (The Fix)
-            // This iterates through all bones and checks if they CONTAIN your text.
-            // It ignores case (Upper/Lower) to make it easier for you.
             foreach (var kvp in nameMap)
             {
-                if (kvp.Key.Contains(targetBoneName, StringComparison.OrdinalIgnoreCase))
-                {
-                    return kvp.Value;
-                }
+                if (kvp.Key.Contains(targetBoneName, StringComparison.OrdinalIgnoreCase)) return kvp.Value;
             }
         }
         return -1;
@@ -489,4 +471,37 @@ public class GameDataReader
     public string GetBoneName(IntPtr meshAddress, int index) { IntPtr meshAsset = _memory.ReadPointer(IntPtr.Add(meshAddress, 0x5B0)); if (meshAsset == IntPtr.Zero) return ""; if (_boneIndexToNameCache.TryGetValue(meshAsset, out var indexMap)) { if (indexMap.TryGetValue(index, out string name)) return name; } return ""; }
     public string GetDebugInfo() => _gNamesFound ? "GNames: OK" : "Scanning...";
     public void LogAllEntities() { }
+
+    // [ADDED THIS FUNCTION FOR AIMBOT]
+    public Vector3 GetBonePosition(IntPtr meshAddress, int boneIndex)
+    {
+        if (meshAddress == IntPtr.Zero || boneIndex < 0) return Vector3.Zero;
+        try
+        {
+            long c2wBase = meshAddress.ToInt64() + Offsets.ComponentToWorld;
+            byte[] c2wBuffer = _memory.ReadBytes((IntPtr)c2wBase, 0x60);
+            if (c2wBuffer == null) return Vector3.Zero;
+
+            var boneArray = _memory.ReadPointer(IntPtr.Add(meshAddress, Offsets.BoneArray));
+            if (boneArray == IntPtr.Zero) return Vector3.Zero;
+
+            int boneOffset = boneIndex * 0x50;
+            byte[] singleBoneBuffer = _memory.ReadBytes(boneArray + boneOffset, 0x40);
+            if (singleBoneBuffer == null) return Vector3.Zero;
+
+            double bx = BitConverter.ToDouble(singleBoneBuffer, 0x20);
+            double by = BitConverter.ToDouble(singleBoneBuffer, 0x28);
+            double bz = BitConverter.ToDouble(singleBoneBuffer, 0x30);
+            Vector3 boneLocal = new Vector3(bx, by, bz);
+
+            var rot = new Vector4(BitConverter.ToDouble(c2wBuffer, 0), BitConverter.ToDouble(c2wBuffer, 8), BitConverter.ToDouble(c2wBuffer, 16), BitConverter.ToDouble(c2wBuffer, 24));
+            var trans = new Vector3(BitConverter.ToDouble(c2wBuffer, 0x20), BitConverter.ToDouble(c2wBuffer, 0x28), BitConverter.ToDouble(c2wBuffer, 0x30));
+            var scale = new Vector3(BitConverter.ToDouble(c2wBuffer, 0x40), BitConverter.ToDouble(c2wBuffer, 0x48), BitConverter.ToDouble(c2wBuffer, 0x50));
+
+            FTransform componentToWorld = new FTransform(rot, trans, scale);
+            Matrix4x4 c2wMatrix = componentToWorld.ToMatrixWithScale();
+            return MultiplyMat(boneLocal, c2wMatrix);
+        }
+        catch { return Vector3.Zero; }
+    }
 }

@@ -5,28 +5,17 @@ namespace Remnant2ESP;
 
 public static class Offsets
 {
-    // [Global]
     public const int GWorld = 0x7B21CA0;
-
-    // [UWorld]
     public const int GameInstance = 0x1B8;
     public const int PersistentLevel = 0x30;
-    public const int Levels = 0x170; // <--- ADD THIS (TArray<ULevel*>)
-
-    // [ULevel]
-    public const int ActorsTArray = 0x98; // New: TArray<AActor*>
+    public const int Levels = 0x170;
+    public const int ActorsTArray = 0x98;
     public const int ActorsCount = 0xA0;
-
-    // [New Offsets for Filtering]
-    public const int ActorOwner = 0x140;       // AActor -> Owner
-    public const int AcknowledgedPawn = 0x338; // PlayerController -> AcknowledgedPawn
-
-    // [LocalPlayer]
+    public const int ActorOwner = 0x140;
+    public const int AcknowledgedPawn = 0x338;
     public const int LocalPlayers = 0x38;
     public const int LocalPlayer_First = 0x0;
     public const int PlayerController = 0x30;
-
-    // [Camera]
     public const int CameraManager = 0x348;
     public const int CameraX = 0x12D0;
     public const int CameraY = 0x12D8;
@@ -35,34 +24,22 @@ public static class Offsets
     public const int CameraYaw = 0x12F0;
     public const int CameraRoll = 0x12F8;
     public const int CameraFOV = 0x1300;
-
-    // [Character Manager] (Existing Enemy List)
     public const int CharPath_288 = 0x288;
     public const int CharPath_B10 = 0xB10;
     public const int Characters = 0x38;
     public const int CharacterCount = 0x8;
     public const int FirstCharacter = 0x10;
     public const int CharacterStride = 0x8;
-
-    // [AActor / APawn]
-    public const int RootComponent = 0x198; // New: For Items
+    public const int RootComponent = 0x198;
     public const int ActorID = 0x18;
-
-    // [USceneComponent]
-    public const int RelativeLocation = 0x128; // New
-
-    // [ACharacter]
+    public const int RelativeLocation = 0x128;
     public const int CharacterMovement = 0x320;
     public const int Mesh = 0x318;
-    public const int HealthNormalized = 0x890; // New: Float (0.0 - 1.0)
-    public const int SpawnState = 0x850; // FName
-
-    // [UCharacterMovementComponent]
+    public const int HealthNormalized = 0x890;
+    public const int SpawnState = 0x850;
     public const int LocationX = 0x2D0;
     public const int LocationY = 0x2D8;
     public const int LocationZ = 0x2E0;
-
-    // [Bones]
     public const int ComponentToWorld = 0x240;
     public const int BoneArray = 0x600;
     public const int BoneCount = 0x608;
@@ -73,11 +50,7 @@ public struct SocketEntry { public string SocketName; public string BoneName; }
 public struct Vector3
 {
     public double X, Y, Z;
-
-    // --- ADD THIS LINE ---
     public static readonly Vector3 Zero = new Vector3(0, 0, 0);
-    // ---------------------
-
     public Vector3(double x, double y, double z) { X = x; Y = y; Z = z; }
     public double Distance(Vector3 other) { double dx = X - other.X; double dy = Y - other.Y; double dz = Z - other.Z; return Math.Sqrt(dx * dx + dy * dy + dz * dz); }
     public bool IsZero => X == 0 && Y == 0 && Z == 0;
@@ -116,13 +89,16 @@ public struct CameraData { public Vector3 Location; public double Pitch; public 
 public class CharacterData
 {
     public IntPtr Address;
-    public string Name; // Raw Name (e.g. BP_RootFlyer_C)
-    public string DisplayName; // Clean Name (e.g. Root Flyer)
+    public string Name;
+    public string DisplayName;
     public Vector3 Location;
     public bool IsPlayer;
     public double Distance;
     public int WeakspotIndex = -1;
     public Dictionary<int, Vector3> Bones { get; set; } = new();
+
+    // [ADDED THIS LINE]
+    public IntPtr MeshAddress;
 }
 
 public class ItemData
