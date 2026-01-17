@@ -1,61 +1,101 @@
 using System;
+// We do not need System.Numerics here. 
+// We will use your project's local Vector3 and standard System.Math (doubles).
 
 namespace Remnant2ESP
 {
     public class WorldToScreen
     {
-        private readonly int _screenWidth;
-        private readonly int _screenHeight;
+        // Screen stats
+        private float _screenWidth;
+        private float _screenHeight;
+        private float _screenCenterX;
+        private float _screenCenterY;
+
+        // Matrix Components 
+        // CHANGED TO DOUBLE: This prevents the "cannot convert double to float" errors
+        private double _m11, _m12, _m13; // Forward
+        private double _m21, _m22, _m23; // Right
+        private double _m31, _m32, _m33; // Up
+
+        private Vector3 _camLocation;
+        private double _focalLength;
+        private bool _isMatrixReady;
 
         public WorldToScreen(int screenWidth, int screenHeight)
         {
-            _screenWidth = screenWidth;
-            _screenHeight = screenHeight;
+            Resize(screenWidth, screenHeight);
         }
 
-        public (int X, int Y)? Project(Vector3 worldPos, CameraData camera)
+        public void Resize(int width, int height)
         {
-            if (double.IsNaN(camera.Yaw) || camera.FOV <= 0) return null;
+            _screenWidth = (float)width;
+            _screenHeight = (float)height;
+            _screenCenterX = width / 2.0f;
+            _screenCenterY = height / 2.0f;
+        }
 
-            // 1. Convert to Radians
+        public void UpdateCamera(CameraData camera)
+        {
+            if (camera.FOV <= 0) return;
+
+            _camLocation = camera.Location;
+
+            // 1. Trig Setup (All Doubles - No Casting Needed yet)
             double radPitch = camera.Pitch * (Math.PI / 180.0);
             double radYaw = camera.Yaw * (Math.PI / 180.0);
             double radRoll = camera.Roll * (Math.PI / 180.0);
 
-            // 2. Trig calculations
-            double SP = Math.Sin(radPitch);
-            double CP = Math.Cos(radPitch);
-            double SY = Math.Sin(radYaw);
-            double CY = Math.Cos(radYaw);
-            double SR = Math.Sin(radRoll);
-            double CR = Math.Cos(radRoll);
+            double sp = Math.Sin(radPitch);
+            double cp = Math.Cos(radPitch);
+            double sy = Math.Sin(radYaw);
+            double cy = Math.Cos(radYaw);
+            double sr = Math.Sin(radRoll);
+            double cr = Math.Cos(radRoll);
 
-            // 3. Matrix Transformation (Standard UE5)
-            Vector3 vForward = new Vector3(CP * CY, CP * SY, SP);
-            Vector3 vRight = new Vector3(SR * SP * CY - CR * SY, SR * SP * SY + CR * CY, -SR * CP);
-            Vector3 vUp = new Vector3(-(CR * SP * CY + SR * SY), CY * SR - CR * SP * SY, CR * CP);
+            // 2. Matrix Transformation
+            // Forward (X Axis)
+            _m11 = cp * cy;
+            _m12 = cp * sy;
+            _m13 = sp;
 
-            // 4. Delta Calculation
-            Vector3 delta = new Vector3(
-                worldPos.X - camera.Location.X,
-                worldPos.Y - camera.Location.Y,
-                worldPos.Z - camera.Location.Z
-            );
+            // Right (Y Axis)
+            _m21 = sr * sp * cy - cr * sy;
+            _m22 = sr * sp * sy + cr * cy;
+            _m23 = -sr * cp;
 
-            // 5. Camera Space Projection
-            double vTransX = (delta.X * vRight.X) + (delta.Y * vRight.Y) + (delta.Z * vRight.Z);
-            double vTransY = (delta.X * vUp.X) + (delta.Y * vUp.Y) + (delta.Z * vUp.Z);
-            double vTransZ = (delta.X * vForward.X) + (delta.Y * vForward.Y) + (delta.Z * vForward.Z);
+            // Up (Z Axis)
+            _m31 = -(cr * sp * cy + sr * sy);
+            _m32 = cy * sr - cr * sp * sy;
+            _m33 = cr * cp;
+
+            // 3. Focal Length
+            _focalLength = _screenCenterX / Math.Tan(camera.FOV * Math.PI / 360.0);
+
+            _isMatrixReady = true;
+        }
+
+        public (float X, float Y)? Project(Vector3 worldPos)
+        {
+            if (!_isMatrixReady) return null;
+
+            // 4. Delta Calculation 
+            double deltaX = (double)worldPos.X - (double)_camLocation.X;
+            double deltaY = (double)worldPos.Y - (double)_camLocation.Y;
+            double deltaZ = (double)worldPos.Z - (double)_camLocation.Z;
+
+            // 5. Dot Product (All Double Math)
+            double vTransX = (deltaX * _m21) + (deltaY * _m22) + (deltaZ * _m23);
+            double vTransY = (deltaX * _m31) + (deltaY * _m32) + (deltaZ * _m33);
+            double vTransZ = (deltaX * _m11) + (deltaY * _m12) + (deltaZ * _m13);
 
             // 6. Behind Camera Check
             if (vTransZ < 1.0) return null;
 
-            // 7. Perspective Projection for Ultrawide
-            float centerWeight = _screenWidth / 2.0f;
-            double focalLength = centerWeight / Math.Tan(camera.FOV * Math.PI / 360.0);
-
-            int screenX = (int)(centerWeight + vTransX * focalLength / vTransZ);
-            int screenY = (int)((_screenHeight / 2.0f) - vTransY * focalLength / vTransZ);
+            // 7. Perspective Projection (Double -> Float)
+            // This is the ONLY place we cast to float, right at the end.
+            float screenX = (float)(_screenCenterX + vTransX * (_focalLength / vTransZ));
+            float screenY = (float)(_screenCenterY - vTransY * (_focalLength / vTransZ));
 
             return (screenX, screenY);
         }
