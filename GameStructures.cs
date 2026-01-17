@@ -73,6 +73,11 @@ public struct SocketEntry { public string SocketName; public string BoneName; }
 public struct Vector3
 {
     public double X, Y, Z;
+
+    // --- ADD THIS LINE ---
+    public static readonly Vector3 Zero = new Vector3(0, 0, 0);
+    // ---------------------
+
     public Vector3(double x, double y, double z) { X = x; Y = y; Z = z; }
     public double Distance(Vector3 other) { double dx = X - other.X; double dy = Y - other.Y; double dz = Z - other.Z; return Math.Sqrt(dx * dx + dy * dy + dz * dz); }
     public bool IsZero => X == 0 && Y == 0 && Z == 0;

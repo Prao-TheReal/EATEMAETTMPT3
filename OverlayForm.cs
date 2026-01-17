@@ -29,6 +29,9 @@ public class OverlayForm : Form
     {
         { "Root_Flyer", "weakpoint_01_L" },
         { "Char_RootZombie_C", "Bone_SZ_Hand_L" },
+        { "Root_Horror", "Pinky2" },
+        { "Char_Pan", "Bon" },
+        { "Char_Root_Pan_Brute", "Weapon_AxeT" },
         { "Char_Nemesis", "Bone_RN_Coll"}
     };
 
@@ -153,7 +156,7 @@ public class OverlayForm : Form
 
                             var renderEnt = new RenderEntity();
                             renderEnt.Distance = (float)character.Distance;
-                            renderEnt.LabelText = $"[{character.Name}] {character.Distance:F0}m";
+                            renderEnt.LabelText = $"[{character.DisplayName}] {character.Distance:F0}m";
 
                             // [CHANGE] Store WORLD Position, do not Project yet!
                             renderEnt.WorldRoot = character.Location;
@@ -328,19 +331,28 @@ public class OverlayForm : Form
         CheckToggle((int)Keys.End, () => { _isRunning = false; Application.Exit(); });
     }
 
+    // Paste this into OverlayForm.cs, replacing the old "OnPaint" function completely.
     protected override void OnPaint(PaintEventArgs e)
     {
         if (!_isRunning) return;
         try
         {
             var g = e.Graphics;
-            g.CompositingMode = CompositingMode.SourceOver; g.CompositingQuality = CompositingQuality.HighSpeed; g.InterpolationMode = InterpolationMode.Low; g.SmoothingMode = SmoothingMode.None; g.PixelOffsetMode = PixelOffsetMode.HighSpeed; g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+
+            // [OPTIMIZATION SETTINGS]
+            // These settings reduce quality slightly to gain massive FPS
+            g.CompositingMode = CompositingMode.SourceOver;
+            g.CompositingQuality = CompositingQuality.HighSpeed;
+            g.InterpolationMode = InterpolationMode.NearestNeighbor;
+            g.SmoothingMode = SmoothingMode.None;
+            g.PixelOffsetMode = PixelOffsetMode.HighSpeed;
+            g.TextRenderingHint = TextRenderingHint.SingleBitPerPixelGridFit; // Fast text
+
             g.Clear(Color.Black);
 
             // [KEY CHANGE] Get FRESH Camera Data right now for drawing
-            // This decouples the camera rotation from the entity search lag
             CameraData? cam = _gameReader.GetCameraData();
-            if (!cam.HasValue) return; // Can't draw without camera
+            if (!cam.HasValue) return;
 
             List<RenderEntity> entities; List<RenderItem> items; bool attached; bool enabled;
             lock (_dataLock) { entities = new List<RenderEntity>(_renderList); items = new List<RenderItem>(_renderItems); attached = _isAttached; enabled = _espEnabled; }
@@ -356,9 +368,17 @@ public class OverlayForm : Form
 
             foreach (var ent in entities)
             {
+                // 1. [OPTIMIZATION] Simple bounds check before math
+                // If the entity is way behind us or too far, skip it early
+                if (ent.Distance > 250) continue;
+
                 // [PROJECT ENTITY ROOT]
                 var screenRoot = _w2s.Project(ent.WorldRoot, cam.Value);
                 if (!screenRoot.HasValue) continue;
+
+                // 2. [OPTIMIZATION] Skip drawing if off-screen
+                if (screenRoot.Value.X < -200 || screenRoot.Value.X > SCREEN_WIDTH + 200) continue;
+
                 Vector3 rootScreen = new Vector3(screenRoot.Value.X, screenRoot.Value.Y, 0);
 
                 // [PROJECT HEAD/WEAKSPOT]
@@ -369,8 +389,8 @@ public class OverlayForm : Form
                     if (w2sHead.HasValue) headScreen = new Vector3(w2sHead.Value.X, w2sHead.Value.Y, 0);
                 }
 
-                // [DRAW SKELETON]
-                if (_drawSkeleton && ent.BoneWorldPos.Count > 0)
+                // [DRAW SKELETON] - Optimized: Only draw if close (< 40m)
+                if (_drawSkeleton && ent.BoneWorldPos.Count > 0 && ent.Distance < 40)
                 {
                     foreach (var kvp in ent.BoneWorldPos)
                     {
@@ -383,6 +403,7 @@ public class OverlayForm : Form
                             if (pos.X > -100 && pos.X < SCREEN_WIDTH + 100 && pos.Y > -100 && pos.Y < SCREEN_HEIGHT + 100)
                             {
                                 g.FillRectangle(_boneBrush, (float)pos.X - 1, (float)pos.Y - 1, 3, 3);
+                                // Only draw text if explicitly asked, otherwise it kills FPS
                                 if (_boneDisplayMode == 1) g.DrawString(kvp.Key.ToString(), _itemFont, Brushes.White, (float)pos.X, (float)pos.Y - 10);
                                 else if (_boneDisplayMode == 2 && ent.BoneNames.ContainsKey(kvp.Key)) g.DrawString(ent.BoneNames[kvp.Key], _itemFont, Brushes.LightGreen, (float)pos.X, (float)pos.Y - 10);
                             }
@@ -396,25 +417,36 @@ public class OverlayForm : Form
                     var hPos = headScreen.Value;
                     g.DrawEllipse(_enemyPen, (float)hPos.X - 4, (float)hPos.Y - 4, 8, 8);
                     g.FillRectangle(Brushes.Red, (float)hPos.X - 2, (float)hPos.Y - 2, 4, 4);
-                    g.DrawString(ent.LockReason, _itemFont, ent.LockColor, (float)hPos.X + 6, (float)hPos.Y - 6);
+                    // g.DrawString(ent.LockReason, _itemFont, ent.LockColor, (float)hPos.X + 6, (float)hPos.Y - 6); // Disable text for FPS
                 }
 
                 // [DRAW BOX]
-                float height = Math.Clamp(1800.0f / ent.Distance, 10.0f, 400.0f); float width = height * 0.6f; float boxX = 0, boxY = 0; bool validBox = false;
-                if (headScreen.HasValue) { boxX = (float)headScreen.Value.X - (width / 2); boxY = (float)headScreen.Value.Y - (height * 0.15f); validBox = true; }
-                else { boxX = (float)rootScreen.X - (width / 2); boxY = (float)rootScreen.Y - height; validBox = true; }
+                float height = Math.Clamp(1800.0f / ent.Distance, 10.0f, 400.0f);
+                float width = height * 0.6f;
+                float boxX = 0, boxY = 0;
 
-                if (!validBox) continue; if (boxX < -width || boxX > SCREEN_WIDTH || boxY < -height || boxY > SCREEN_HEIGHT) continue;
+                if (headScreen.HasValue) { boxX = (float)headScreen.Value.X - (width / 2); boxY = (float)headScreen.Value.Y - (height * 0.15f); }
+                else { boxX = (float)rootScreen.X - (width / 2); boxY = (float)rootScreen.Y - height; }
+
                 var distColor = ent.Distance < 30 ? _enemyPen : _enemyPenFar;
                 if (_drawBox) g.DrawRectangle(distColor, boxX, boxY, width, height);
 
-                if (_drawLines) { float targetX = headScreen.HasValue ? (float)headScreen.Value.X : (boxX + width / 2); float targetY = headScreen.HasValue ? (float)headScreen.Value.Y : (boxY + height / 2); g.DrawLine(_linePen, centerX, SCREEN_HEIGHT, targetX, targetY); }
-                if (_drawDist) { float estimatedWidth = ent.LabelText.Length * 6.0f; float textX = boxX + (width - estimatedWidth) / 2; float textY = boxY - 15; g.DrawString(ent.LabelText, _itemFont, Brushes.Salmon, textX, textY); }
+                if (_drawLines)
+                {
+                    float targetX = headScreen.HasValue ? (float)headScreen.Value.X : (boxX + width / 2);
+                    float targetY = headScreen.HasValue ? (float)headScreen.Value.Y : (boxY + height / 2);
+                    g.DrawLine(_linePen, centerX, SCREEN_HEIGHT, targetX, targetY);
+                }
+
+                if (_drawDist)
+                {
+                    // Optimized text placement
+                    g.DrawString(ent.LabelText, _itemFont, Brushes.Salmon, boxX, boxY - 15);
+                }
 
                 // [AIMBOT LOGIC]
                 if (ent.HasWeakspot && ent.WorldWeakspot.HasValue)
                 {
-                    // Use FRESH screen position for aimbot
                     var aimScreen = _w2s.Project(ent.WorldWeakspot.Value, cam.Value);
 
                     if (aimScreen.HasValue)
@@ -428,7 +460,7 @@ public class OverlayForm : Form
                             if (ent.Distance < closestWorldDist)
                             {
                                 closestWorldDist = ent.Distance;
-                                bestTargetPos = ent.WorldWeakspot; // Keep as World Pos
+                                bestTargetPos = ent.WorldWeakspot;
                             }
                         }
                     }
