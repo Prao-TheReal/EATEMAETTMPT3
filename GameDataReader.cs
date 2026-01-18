@@ -358,7 +358,7 @@ public class GameDataReader
 
                 // [YOUR EXACT FILTERS]
                 if (name.Contains("Critter") || name.Contains("Deer") ||
-                    name.Contains("Camera") || name.Contains("Drone") || name.Contains("summon") ||
+                    name.Contains("Camera") || name.Contains("Drone") || name.Contains("Player") || name.Contains("summon") ||
                     name.Contains("Volume") || name.Contains("Brush") || name.Contains("Light") ||
                     name.Contains("Dep") || name.Contains("Crow") || name.Contains("jagoff") ||
                     name.Contains("Corpse")) continue;

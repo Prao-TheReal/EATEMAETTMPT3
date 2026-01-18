@@ -29,17 +29,30 @@ public class NameReader
             IntPtr chunkPtr = _memory.ReadPointer(chunkPtrAddress);
             if (chunkPtr == IntPtr.Zero) return "NULL_CHUNK";
 
-            // [FIXED] BACK TO STRIDE 2 (Standard for UE5)
+            // Standard UE5 Stride = 2
+            // This points us to the [Header] of the Name Entry
             IntPtr nameEntry = IntPtr.Add(chunkPtr, (int)(withinChunkIndex * 2));
 
-            byte[] header = _memory.ReadBytes(nameEntry, 2);
-            if (header == null) return "ERR_READ";
+            // Read the 2-byte Header
+            byte[] headerBytes = _memory.ReadBytes(nameEntry, 2);
+            if (headerBytes == null) return "ERR_READ";
 
-            int len = header[0] >> 1;
-            bool isWide = (header[0] & 1) != 0;
+            // [FIXED LOGIC] 
+            // UE5 Header is a 16-bit value (ushort).
+            // Length is the value shifted right by 6 bits.
+            // Wide-Flag is the very first bit.
+            ushort header = BitConverter.ToUInt16(headerBytes, 0);
 
-            if (len <= 0 || len > 256) return "LEN_ERR";
+            int len = header >> 6;
+            bool isWide = (header & 1) != 0;
 
+            if (len <= 0 || len > 256)
+            {
+                // This will likely stop happening now, but good for debug
+                return $"LEN_ERR[{headerBytes[0]:X2} {headerBytes[1]:X2}]";
+            }
+
+            // Offset 2 bytes to skip the header and read the text
             if (isWide)
             {
                 byte[] b = _memory.ReadBytes(IntPtr.Add(nameEntry, 2), len * 2);

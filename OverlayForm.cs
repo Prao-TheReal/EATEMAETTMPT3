@@ -38,6 +38,7 @@ public class OverlayForm : Form
         { "Char_RootZombie_C", "Bone_SZ_Hand_L" },
         { "Root_Horror", "Pinky2" },
         { "Char_Pan", "Bon" },
+        { "Fae_Soldier_Spear", "Bone_FA_Hand" },
         { "Char_Root_Pan_Brute", "Weapon_AxeT" },
         { "Char_Nemesis", "Bone_RN_Coll"}
     };
