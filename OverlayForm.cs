@@ -17,7 +17,7 @@ public class OverlayForm : Form
     [DllImport("dwmapi.dll")] private static extern int DwmExtendFrameIntoClientArea(IntPtr hWnd, ref MARGINS pMarInset);
     [StructLayout(LayoutKind.Sequential)] private struct MARGINS { public int Left, Right, Top, Bottom; }
 
-    // [NEW IMPORTS FOR WINDOW TRACKING]
+    // [Window Tracking]
     [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr hWnd, ref Point lpPoint);
     [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect);
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
@@ -29,18 +29,29 @@ public class OverlayForm : Form
     private int _screenHeight;
     private const int TARGET_FPS = 144;
     private const float AIM_FOV_RADIUS = 351.0f;
-    private Process? _gameProcess; // Added to track the specific game window
+    private Process? _gameProcess;
 
     // --- [CUSTOM OVERRIDES] ---
-    private readonly Dictionary<string, string> _customBoneOverrides = new()
+    // Key: Entity Name (Partial Match)
+    // Value: STRING (Bone Name) OR INT (Bone Index)
+    private readonly Dictionary<string, object> _customBoneOverrides = new()
     {
         { "Root_Flyer", "weakpoint_01_L" },
         { "Char_RootZombie_C", "Bone_SZ_Hand_L" },
         { "Root_Horror", "Pinky2" },
         { "Char_Pan", "Bon" },
         { "Fae_Soldier_Spear", "Bone_FA_Hand" },
+        { "Fae_Soldier_RoyalArc", 48 },
+        { "Fae_Soldier_Armored", 48 },
+        { "Fae_Penitent", 48 },
+        { "Char_Nerud_Sentinel_C", 12 },
+        { "Char_Nerud_Sentinel_Heavy_C", 19 },
+        { "Nerud_Psyker_Hermit", 54 },
+        { "ServiceDrone_", 120 },
+        { "Amalgam", 12 },
         { "Char_Root_Pan_Brute", "Weapon_AxeT" },
-        { "Char_Nemesis", "Bone_RN_Coll"}
+        { "Char_Nemesis", "Bone_RN_Coll"},
+        // Add bone number overrides here if needed: { "BossName", 48 } DO NOT PUT " " 
     };
 
     // [Core Components]
@@ -191,18 +202,33 @@ public class OverlayForm : Form
                                 double waistHeight = minZ + ((maxZ - minZ) * 0.5);
                                 Vector3? weakspot3D = null;
 
+                                // [UPDATED OVERRIDE LOGIC]
                                 foreach (var overrideEntry in _customBoneOverrides)
                                 {
                                     if (character.Name.Contains(overrideEntry.Key, StringComparison.OrdinalIgnoreCase))
                                     {
-                                        int targetIndex = _gameReader.GetBoneIndexByName(enemyMesh, overrideEntry.Value);
+                                        int targetIndex = -1;
+
+                                        // Check if value is Integer (Direct Index) or String (Bone Name)
+                                        if (overrideEntry.Value is int overrideIndex)
+                                        {
+                                            targetIndex = overrideIndex;
+                                        }
+                                        else if (overrideEntry.Value is string overrideName)
+                                        {
+                                            targetIndex = _gameReader.GetBoneIndexByName(enemyMesh, overrideName);
+                                        }
+
                                         if (targetIndex != -1 && character.Bones.ContainsKey(targetIndex))
                                         {
                                             weakspot3D = character.Bones[targetIndex];
-                                            renderEnt.LockReason = "OVERRIDE"; renderEnt.LockColor = Brushes.Cyan; break;
+                                            renderEnt.LockReason = "OVERRIDE";
+                                            renderEnt.LockColor = Brushes.Cyan;
+                                            break;
                                         }
                                     }
                                 }
+
                                 if (weakspot3D == null && character.WeakspotIndex != -1 && character.Bones.ContainsKey(character.WeakspotIndex))
                                 {
                                     weakspot3D = character.Bones[character.WeakspotIndex]; renderEnt.LockReason = isVis ? "CRITICAL" : "CRITICAL (HID)";
@@ -274,6 +300,8 @@ public class OverlayForm : Form
         CheckToggle((int)Keys.F11, () => { _boneDisplayMode++; if (_boneDisplayMode > 2) _boneDisplayMode = 0; });
         CheckToggle((int)Keys.F12, () => { _gameReader.DebugMode = !_gameReader.DebugMode; Console.Beep(); });
         CheckToggle((int)Keys.Insert, () => _drawItems = !_drawItems); CheckToggle((int)Keys.End, () => { _isRunning = false; Application.Exit(); });
+
+        // [DEBUG LOGGING REMOVED to prevent errors]
     }
 
     protected override void OnPaint(PaintEventArgs e)
@@ -289,18 +317,15 @@ public class OverlayForm : Form
             CameraData? cam = _gameReader.GetCameraData();
             if (!cam.HasValue) return;
 
-            // [NEW FIX] Window Tracking
-            // This forces the Overlay to snap to the Game Window's Client Area (Actual gameplay area)
-            // This fixes offset/floating names when game resolution != monitor resolution
+            // [Window Tracking]
             if (_gameProcess != null && !_gameProcess.HasExited)
             {
                 IntPtr handle = _gameProcess.MainWindowHandle;
                 if (GetClientRect(handle, out RECT rect))
                 {
                     Point pt = new Point(0, 0);
-                    ClientToScreen(handle, ref pt); // Gets absolute screen position of the black game area
+                    ClientToScreen(handle, ref pt);
 
-                    // Only update if changed (prevents flicker)
                     if (this.Left != pt.X || this.Top != pt.Y || _screenWidth != rect.Right || _screenHeight != rect.Bottom)
                     {
                         this.Location = pt;
@@ -312,7 +337,6 @@ public class OverlayForm : Form
                 }
             }
 
-            // Update Matrix (Double Precision now)
             _w2s.UpdateCamera(cam.Value);
 
             List<RenderEntity> entities; List<RenderItem> items; bool attached; bool enabled;

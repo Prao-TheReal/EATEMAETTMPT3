@@ -179,7 +179,7 @@ public class GameDataReader
                                   name.Contains("Material") || name.Contains("Interactive_") || name.Contains("Item_") || name.Contains("Weapon_");
 
                     if (name.Contains("Default__") || name.Contains("Context") || name.Contains("3D") ||
-                        name.Contains("Tree") || name.Contains("Leaves") || name.Contains("Light") || name.Contains("Pillar") || name.Contains("Breakable") || name.Contains("Physics") || name.Contains("Dynamic") ||
+                        name.Contains("Tree") || name.Contains("Leaves") || name.Contains("Riot") || name.Contains("Light") || name.Contains("Pillar") || name.Contains("Breakable") || name.Contains("Physics") || name.Contains("Dynamic") ||
                         name.Contains("Spawn") || name.Contains("Char") || name.Contains("FX") ||
                         name.Contains("Mesh") || name.Contains("Rock") || name.Contains("Zig") ||
                         name.Contains("Floor") || name.Contains("AI") || name.Contains("Buildi") || name.Contains("Stool") || name.Contains("Vase") ||
@@ -209,7 +209,7 @@ public class GameDataReader
                     if (name.Contains("Relic") || name.Contains("Gem") || name.Contains("Material")) color = Color.Orange;
                     else if (name.Contains("Ring_") || name.Contains("Amulet")) color = Color.Purple;
                     else if (name.Contains("Simulacrum")) color = Color.Red;
-                    else if (name.Contains("Lumenite") || name.Contains("Loo")) color = Color.LightPink;
+                    else if (name.Contains("Lumenite") || name.Contains("Loo")) color = Color.HotPink;
                     else if (name.Contains("Scrap")) color = Color.Gray;
                     else if (name.Contains("Iron")) color = Color.LightGreen;
                     else if (name.Contains("Ammo")) color = Color.Yellow;
@@ -358,7 +358,7 @@ public class GameDataReader
 
                 // [YOUR EXACT FILTERS]
                 if (name.Contains("Critter") || name.Contains("Deer") ||
-                    name.Contains("Camera") || name.Contains("Drone") || name.Contains("Player") || name.Contains("summon") ||
+                    name.Contains("Camera") || name.Contains("Shield") || name.Contains("Player") || name.Contains("summon") ||
                     name.Contains("Volume") || name.Contains("Brush") || name.Contains("Light") ||
                     name.Contains("Dep") || name.Contains("Crow") || name.Contains("jagoff") ||
                     name.Contains("Corpse")) continue;
