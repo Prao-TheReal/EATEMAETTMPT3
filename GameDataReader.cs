@@ -171,17 +171,17 @@ public class GameDataReader
                     lock (_dataLock) { name = _nameReader.GetName(id); }
 
                     bool isItem = name.Contains("Ring_") || name.Contains("Quest_") || name.Contains("Relic") || name.Contains("Weapon_") ||
-                                  name.Contains("Amulet") || name.Contains("drop") || name.Contains("Loot") ||
+                                  name.Contains("Amulet") || name.Contains("drop") || name.Contains("Gem") || name.Contains("Tier") || name.Contains("Loot") ||
                                   name.Contains("Ammo") || name.Contains("Scrap") || name.Contains("Tome") || name.Contains("Iron") ||
                                   name.Contains("Forged") || name.Contains("Galvanized") || name.Contains("Hardened") ||
                                   name.Contains("Simulacrum") || name.Contains("Lumenite") || name.Contains("Hidden") || name.Contains("Engram") ||
-                                  name.Contains("Chest") || name.Contains("Container") || name.Contains("Resource") ||
+                                  name.Contains("Chest") || name.Contains("Container") || name.Contains("SupplyChest") || name.Contains("Supply") || name.Contains("Resource") ||
                                   name.Contains("Material") || name.Contains("Interactive_") || name.Contains("Item_") || name.Contains("Weapon_");
 
                     if (name.Contains("Default__") || name.Contains("Context") || name.Contains("3D") ||
                         name.Contains("Tree") || name.Contains("Leaves") || name.Contains("Riot") || name.Contains("Light") || name.Contains("Pillar") || name.Contains("Breakable") || name.Contains("Physics") || name.Contains("Dynamic") ||
-                        name.Contains("Spawn") || name.Contains("Char") || name.Contains("FX") ||
-                        name.Contains("Mesh") || name.Contains("Rock") || name.Contains("Zig") ||
+                        name.Equals("SpawnPoint_Item_C") || name.Contains("Sniper") || name.Contains("GEN_VARI") || name.Equals("SpawnPoint_Quest_C") || name.Contains("DLC") || name.Contains("Char") || name.Contains("FX") ||
+                        name.Contains("Mesh") || name.Contains("Rock") || name.Contains("BacktrackDoor") || name.Contains("Zig") ||
                         name.Contains("Floor") || name.Contains("AI") || name.Contains("Buildi") || name.Contains("Stool") || name.Contains("Vase") ||
                         name.Contains("Pot") || name.Contains("Pan") || name.Contains("VFX") ||
                         name.Contains("Sound") || name.Contains("GAME") || name.Contains("Decal") || name.Contains("Volume") ||
