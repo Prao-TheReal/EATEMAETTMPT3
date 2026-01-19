@@ -180,7 +180,7 @@ public class GameDataReader
 
                     if (name.Contains("Default__") || name.Contains("Context") || name.Contains("3D") ||
                         name.Contains("Tree") || name.Contains("Leaves") || name.Contains("Riot") || name.Contains("Light") || name.Contains("Pillar") || name.Contains("Breakable") || name.Contains("Physics") || name.Contains("Dynamic") ||
-                        name.Equals("SpawnPoint_Item_C") || name.Contains("Sniper") || name.Contains("GEN_VARI") || name.Equals("SpawnPoint_Quest_C") || name.Contains("DLC") || name.Contains("Char") || name.Contains("FX") ||
+                        name.Equals("SpawnPoint_Item_C") || name.Contains("Sniper") || name.Contains("Weapon_Service") || name.Contains("SpawnPoint") || name.Contains("GEN_VARI") || name.Equals("SpawnPoint_Quest_C") || name.Contains("TIGERPUMP") || name.Contains("Char") || name.Contains("FX") ||
                         name.Contains("Mesh") || name.Contains("Rock") || name.Contains("BacktrackDoor") || name.Contains("Zig") ||
                         name.Contains("Floor") || name.Contains("AI") || name.Contains("Buildi") || name.Contains("Stool") || name.Contains("Vase") ||
                         name.Contains("Pot") || name.Contains("Pan") || name.Contains("VFX") ||
@@ -358,9 +358,9 @@ public class GameDataReader
 
                 // [YOUR EXACT FILTERS]
                 if (name.Contains("Critter") || name.Contains("Deer") ||
-                    name.Contains("Camera") || name.Contains("Shield") || name.Contains("Player") || name.Contains("summon") ||
-                    name.Contains("Volume") || name.Contains("Brush") || name.Contains("Light") ||
-                    name.Contains("Dep") || name.Contains("Crow") || name.Contains("jagoff") ||
+                    name.Contains("Camera") || name.Equals("Nerud_Crab_Boid_BP_C") || name.Contains("Shield") || name.Contains("Player") || name.Contains("summon") ||
+                    name.Contains("Volume") || name.Contains("Brush") || name.Equals("Char_Nerud_Boid_C") || name.Contains("Light") ||
+                    name.Contains("Dep") || name.Contains("Crow") || name.Equals("Nerud_Worm_BP_C") || name.Contains("jagoff") ||
                     name.Contains("Corpse")) continue;
 
                 if (!name.Contains("BP_") &&
