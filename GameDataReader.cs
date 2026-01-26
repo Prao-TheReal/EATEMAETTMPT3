@@ -240,51 +240,50 @@ public class GameDataReader
     {
         var outputList = new List<CharacterData>();
 
+        // 1. Refresh the cache every 1 second
+        // This is the ONLY place where entities should be added or removed permanently.
         if ((DateTime.Now - _lastCacheTime).TotalSeconds > CACHE_INTERVAL)
         {
             _lastCacheTime = DateTime.Now;
             RefreshCache(camera);
         }
 
-        for (int i = _entityCache.Count - 1; i >= 0; i--)
+        // 2. Iterate through the cache (Read-Only Mode)
+        // We use a foreach loop and NEVER call RemoveAt.
+        // If a check fails, we just 'continue' (skip) to the next one.
+        foreach (var cached in _entityCache)
         {
-            var cached = _entityCache[i];
-
-            // [RESTORED STRICT CHECKS FROM YOUR FILE]
-
-            // 1. Health Check
+            // [CHECK 1] Health (Optional based on your preference)
             float health = _memory.ReadFloat(cached.Address + Offsets.HealthNormalized);
-            if (health <= 0.001f)
-            {
-                _entityCache.RemoveAt(i);
-                continue;
-            }
+            if (health <= 0.001f) continue; // Skip this frame, but keep in list
 
-            // 2. CharacterMovement Check (Kills static meshes)
-            IntPtr moveComp = _memory.ReadPointer(cached.Address + Offsets.CharacterMovement);
-            if (moveComp == IntPtr.Zero)
-            {
-                _entityCache.RemoveAt(i);
-                continue;
-            }
+            // [CHECK 2] RootComponent (Visuals)
+            IntPtr rootComp = _memory.ReadPointer(cached.Address + Offsets.RootComponent);
+            if (rootComp == IntPtr.Zero) continue; // Skip this frame
 
-            // 3. Fast Position Read
+            // [CHECK 3] Bone Count Filter (The Anti-Junk)
+            IntPtr mesh = _memory.ReadPointer(cached.Address + Offsets.Mesh);
+            if (mesh == IntPtr.Zero) continue;
+
+            int boneCount = _memory.ReadInt32(mesh + Offsets.BoneCount);
+            // If the read fails or it's a rock, just skip it. 
+            // If it was a glitch, it will draw correctly on the next frame!
+            if (boneCount < 10) continue;
+
+            // [CHECK 4] Position Math
             Vector3 location = new Vector3(0, 0, 0);
-            byte[] posBuffer = _memory.ReadBytes(moveComp + Offsets.LocationX, 24);
-            if (posBuffer != null)
-            {
-                double x = BitConverter.ToDouble(posBuffer, 0);
-                double y = BitConverter.ToDouble(posBuffer, 8);
-                double z = BitConverter.ToDouble(posBuffer, 16);
-                location = new Vector3(x, y, z);
-            }
+            IntPtr c2w = rootComp + Offsets.ComponentToWorld;
+            double x = _memory.ReadDouble(c2w + 0x20);
+            double y = _memory.ReadDouble(c2w + 0x28);
+            double z = _memory.ReadDouble(c2w + 0x30);
+            location = new Vector3(x, y, z);
 
             if (location.IsZero) continue;
 
             double dist = location.Distance(camera.Location) / 100.0;
-            if (dist > 150) continue;
+            if (dist > 150) continue; // Too far? Just skip drawing.
 
-            // [ADDED] Lazy Load Weakspot
+            // Lazy Load Weakspot
             if (!cached.IsPlayer && cached.WeakspotIndex == -1)
             {
                 cached.WeakspotIndex = GetWeakspotBoneIndex(cached.Address, cached.Mesh);
@@ -299,17 +298,17 @@ public class GameDataReader
                 Location = location,
                 Distance = dist,
                 WeakspotIndex = cached.WeakspotIndex,
-                MeshAddress = cached.Mesh, // [ADDED]
+                MeshAddress = cached.Mesh,
                 Bones = new Dictionary<int, Vector3>()
             };
 
-            // [KEPT] Your skeleton logic
+            // Only load full skeleton if close (optimization)
             if (!charData.IsPlayer && dist < 80)
             {
                 charData.Bones = GetSkeleton(charData.Address);
                 if (charData.Bones.Count > 0)
                 {
-                    IntPtr mesh = _memory.ReadPointer(charData.Address + Offsets.Mesh);
+                    // Refresh weakspot occasionally in case it changes
                     charData.WeakspotIndex = GetWeakspotBoneIndex(charData.Address, mesh);
                 }
             }
@@ -359,7 +358,7 @@ public class GameDataReader
                 // [YOUR EXACT FILTERS]
                 if (name.Contains("Critter") || name.Contains("Deer") ||
                     name.Contains("Camera") || name.Equals("Nerud_Crab_Boid_BP_C") || name.Contains("Shield") || name.Contains("Player") || name.Contains("summon") ||
-                    name.Contains("Volume") || name.Contains("Brush") || name.Equals("Char_Nerud_Boid_C") || name.Contains("Light") ||
+                    name.Contains("Volume") || name.Contains("Brush") || name.Contains("Building") || name.Contains("Breakable") || name.Equals("Char_Nerud_Boid_C") || name.Contains("Light") ||
                     name.Contains("Dep") || name.Contains("Crow") || name.Equals("Nerud_Worm_BP_C") || name.Contains("jagoff") ||
                     name.Contains("Corpse")) continue;
 

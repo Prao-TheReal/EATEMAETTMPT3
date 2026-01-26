@@ -28,7 +28,7 @@ public class OverlayForm : Form
     private int _screenWidth;
     private int _screenHeight;
     private const int TARGET_FPS = 144;
-    private const float AIM_FOV_RADIUS = 351.0f;
+    private const float AIM_FOV_RADIUS = 300.0f;
     private Process? _gameProcess;
 
     // --- [CUSTOM OVERRIDES] ---
